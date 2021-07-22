@@ -10,7 +10,7 @@ import severity from 'vs/base/common/severity';
 import { Event, Emitter } from 'vs/base/common/event';
 import { Position, IPosition } from 'vs/editor/common/core/position';
 import * as aria from 'vs/base/browser/ui/aria/aria';
-import { IDebugSession, IConfig, IThread, IRawModelUpdate, IDebugService, IRawStoppedDetails, State, LoadedSourceEvent, IFunctionBreakpoint, IExceptionBreakpoint, IBreakpoint, IExceptionInfo, AdapterEndEvent, IDebugger, VIEWLET_ID, IDebugConfiguration, IReplElement, IStackFrame, IExpression, IReplElementSource, IDataBreakpoint, IDebugSessionOptions } from 'vs/workbench/contrib/debug/common/debug';
+import { IDebugSession, IConfig, IThread, IRawModelUpdate, IDebugService, IRawStoppedDetails, State, LoadedSourceEvent, IFunctionBreakpoint, IExceptionBreakpoint, IBreakpoint, IExceptionInfo, AdapterEndEvent, IDebugger, VIEWLET_ID, IDebugConfiguration, IReplElement, IStackFrame, IExpression, IReplElementSource, IDataBreakpoint, IDebugSessionOptions, IInstructionBreakpoint } from 'vs/workbench/contrib/debug/common/debug';
 import { Source } from 'vs/workbench/contrib/debug/common/debugSource';
 import { mixin } from 'vs/base/common/objects';
 import { Thread, ExpressionContainer, DebugModel } from 'vs/workbench/contrib/debug/common/debugModel';
@@ -36,6 +36,7 @@ import { filterExceptionsFromTelemetry } from 'vs/workbench/contrib/debug/common
 import { DebugCompoundRoot } from 'vs/workbench/contrib/debug/common/debugCompoundRoot';
 import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
+import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 
 export class DebugSession implements IDebugSession {
 
@@ -50,7 +51,7 @@ export class DebugSession implements IDebugSession {
 	private rawListeners: IDisposable[] = [];
 	private fetchThreadsScheduler: RunOnceScheduler | undefined;
 	private repl: ReplModel;
-	private stoppedDetails: IRawStoppedDetails | undefined;
+	private stoppedDetails: IRawStoppedDetails[] = [];
 
 	private readonly _onDidChangeState = new Emitter<void>();
 	private readonly _onDidEndAdapter = new Emitter<AdapterEndEvent | undefined>();
@@ -83,7 +84,8 @@ export class DebugSession implements IDebugSession {
 		@ILifecycleService lifecycleService: ILifecycleService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
-		@ICustomEndpointTelemetryService private readonly customEndpointTelemetryService: ICustomEndpointTelemetryService
+		@ICustomEndpointTelemetryService private readonly customEndpointTelemetryService: ICustomEndpointTelemetryService,
+		@IContextKeyService contextKeyService: IContextKeyService
 	) {
 		this._options = options || {};
 		if (this.hasSeparateRepl()) {
@@ -95,7 +97,7 @@ export class DebugSession implements IDebugSession {
 		const toDispose: IDisposable[] = [];
 		toDispose.push(this.repl.onDidChangeElements(() => this._onDidChangeREPLElements.fire()));
 		if (lifecycleService) {
-			toDispose.push(lifecycleService.onDidShutdown(() => {
+			toDispose.push(lifecycleService.onWillShutdown(() => {
 				this.shutdown();
 				dispose(toDispose);
 			}));
@@ -137,6 +139,10 @@ export class DebugSession implements IDebugSession {
 
 	get compoundRoot(): DebugCompoundRoot | undefined {
 		return this._options.compoundRoot;
+	}
+
+	get isSimpleUI(): boolean {
+		return this._options.debugUI?.simple ?? false;
 	}
 
 	setConfiguration(configuration: { resolved: IConfig, unresolved: IConfig | undefined }) {
@@ -228,7 +234,7 @@ export class DebugSession implements IDebugSession {
 
 		if (this.raw) {
 			// if there was already a connection make sure to remove old listeners
-			this.shutdown();
+			await this.shutdown();
 		}
 
 		try {
@@ -258,7 +264,7 @@ export class DebugSession implements IDebugSession {
 		} catch (err) {
 			this.initialized = true;
 			this._onDidChangeState.fire();
-			this.shutdown();
+			await this.shutdown();
 			throw err;
 		}
 	}
@@ -447,6 +453,23 @@ export class DebugSession implements IDebugSession {
 		}
 	}
 
+	async sendInstructionBreakpoints(instructionBreakpoints: IInstructionBreakpoint[]): Promise<void> {
+		if (!this.raw) {
+			throw new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'instruction breakpoints'));
+		}
+
+		if (this.raw.readyForBreakpoints) {
+			const response = await this.raw.setInstructionBreakpoints({ breakpoints: instructionBreakpoints });
+			if (response && response.body) {
+				const data = new Map<string, DebugProtocol.Breakpoint>();
+				for (let i = 0; i < instructionBreakpoints.length; i++) {
+					data.set(instructionBreakpoints[i].getId(), response.body.breakpoints[i]);
+				}
+				this.model.setBreakpointSessionData(this.getId(), this.capabilities, data);
+			}
+		}
+	}
+
 	async breakpointsLocations(uri: URI, lineNumber: number): Promise<IPosition[]> {
 		if (!this.raw) {
 			throw new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'breakpoints locations'));
@@ -536,36 +559,47 @@ export class DebugSession implements IDebugSession {
 		await this.raw.restartFrame({ frameId }, threadId);
 	}
 
-	async next(threadId: number): Promise<void> {
+	private setLastSteppingGranularity(threadId: number, granularity?: DebugProtocol.SteppingGranularity) {
+		const thread = this.getThread(threadId);
+		if (thread) {
+			thread.lastSteppingGranularity = granularity;
+		}
+	}
+
+	async next(threadId: number, granularity?: DebugProtocol.SteppingGranularity): Promise<void> {
 		if (!this.raw) {
 			throw new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'next'));
 		}
 
-		await this.raw.next({ threadId });
+		this.setLastSteppingGranularity(threadId, granularity);
+		await this.raw.next({ threadId, granularity });
 	}
 
-	async stepIn(threadId: number, targetId?: number): Promise<void> {
+	async stepIn(threadId: number, targetId?: number, granularity?: DebugProtocol.SteppingGranularity): Promise<void> {
 		if (!this.raw) {
 			throw new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'stepIn'));
 		}
 
-		await this.raw.stepIn({ threadId, targetId });
+		this.setLastSteppingGranularity(threadId, granularity);
+		await this.raw.stepIn({ threadId, targetId, granularity });
 	}
 
-	async stepOut(threadId: number): Promise<void> {
+	async stepOut(threadId: number, granularity?: DebugProtocol.SteppingGranularity): Promise<void> {
 		if (!this.raw) {
 			throw new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'stepOut'));
 		}
 
-		await this.raw.stepOut({ threadId });
+		this.setLastSteppingGranularity(threadId, granularity);
+		await this.raw.stepOut({ threadId, granularity });
 	}
 
-	async stepBack(threadId: number): Promise<void> {
+	async stepBack(threadId: number, granularity?: DebugProtocol.SteppingGranularity): Promise<void> {
 		if (!this.raw) {
 			throw new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'stepBack'));
 		}
 
-		await this.raw.stepBack({ threadId });
+		this.setLastSteppingGranularity(threadId, granularity);
+		await this.raw.stepBack({ threadId, granularity });
 	}
 
 	async continue(threadId: number): Promise<void> {
@@ -686,6 +720,15 @@ export class DebugSession implements IDebugSession {
 		return this.raw.cancel({ progressId });
 	}
 
+	async disassemble(memoryReference: string, offset: number, instructionOffset: number, instructionCount: number): Promise<DebugProtocol.DisassembledInstruction[] | undefined> {
+		if (!this.raw) {
+			return Promise.reject(new Error(localize('noDebugAdapter', "No debugger available, can not send '{0}'", 'disassemble')));
+		}
+
+		const response = await this.raw.disassemble({ memoryReference, offset, instructionOffset, instructionCount, resolveSymbols: true });
+		return response?.body?.instructions;
+	}
+
 	//---- threads
 
 	getThread(threadId: number): Thread | undefined {
@@ -722,6 +765,10 @@ export class DebugSession implements IDebugSession {
 				ExpressionContainer.allValues.clear();
 			}
 		}
+	}
+
+	getStoppedDetails(): IRawStoppedDetails | undefined {
+		return this.stoppedDetails.length >= 1 ? this.stoppedDetails[0] : undefined;
 	}
 
 	rawUpdate(data: IRawModelUpdate): void {
@@ -821,7 +868,7 @@ export class DebugSession implements IDebugSession {
 		}));
 
 		this.rawListeners.push(this.raw.onDidStop(async event => {
-			this.stoppedDetails = event.body;
+			this.stoppedDetails.push(event.body);
 			await this.fetchThreads(event.body);
 			const thread = typeof event.body.threadId === 'number' ? this.getThread(event.body.threadId) : undefined;
 			if (thread) {
@@ -829,10 +876,11 @@ export class DebugSession implements IDebugSession {
 				// Second retrieves the rest of the call stack. For performance reasons #25605
 				const promises = this.model.fetchCallStack(<Thread>thread);
 				const focus = async () => {
+					// Don't switch view when DisassemblyView is in focus.
 					if (!event.body.preserveFocusHint && thread.getCallStack().length) {
 						await this.debugService.focusStackFrame(undefined, thread);
 						if (thread.stoppedDetails) {
-							if (this.configurationService.getValue<IDebugConfiguration>('debug').openDebug === 'openOnDebugBreak') {
+							if (this.configurationService.getValue<IDebugConfiguration>('debug').openDebug === 'openOnDebugBreak' && !this.isSimpleUI) {
 								this.viewletService.openViewlet(VIEWLET_ID);
 							}
 
@@ -889,18 +937,34 @@ export class DebugSession implements IDebugSession {
 
 		this.rawListeners.push(this.raw.onDidContinued(event => {
 			const threadId = event.body.allThreadsContinued !== false ? undefined : event.body.threadId;
-			if (threadId) {
+			if (typeof threadId === 'number') {
+				this.stoppedDetails = this.stoppedDetails.filter(sd => sd.threadId !== threadId);
 				const tokens = this.cancellationMap.get(threadId);
 				this.cancellationMap.delete(threadId);
 				if (tokens) {
 					tokens.forEach(t => t.cancel());
 				}
 			} else {
+				this.stoppedDetails = [];
 				this.cancelAllRequests();
 			}
 
 			this.model.clearThreads(this.getId(), false, threadId);
 			this._onDidChangeState.fire();
+			// If the focused thread does get stopped in the next 800ms auto focus another thread or session https://github.com/microsoft/vscode/issues/125144
+			if (typeof threadId === 'number') {
+				const thread = this.debugService.getViewModel().focusedThread;
+				if (thread && thread.threadId === threadId && !thread.stopped) {
+					const toFocusThreadId = this.getStoppedDetails()?.threadId;
+					const toFocusThread = typeof toFocusThreadId === 'number' ? this.getThread(toFocusThreadId) : undefined;
+					this.debugService.focusStackFrame(undefined, toFocusThread);
+				}
+			} else {
+				const session = this.debugService.getViewModel().focusedSession;
+				if (session && session.getId() === this.getId() && session.state !== State.Stopped) {
+					this.debugService.focusStackFrame(undefined);
+				}
+			}
 		}));
 
 		const outputQueue = new Queue<void>();
@@ -1043,7 +1107,7 @@ export class DebugSession implements IDebugSession {
 				// If invalidated event only requires to update variables or watch, do that, otherwise refatch threads https://github.com/microsoft/vscode/issues/106745
 				this.cancelAllRequests();
 				this.model.clearThreads(this.getId(), true);
-				await this.fetchThreads(this.stoppedDetails);
+				await this.fetchThreads(this.getStoppedDetails());
 			}
 
 			const viewModel = this.debugService.getViewModel();
@@ -1066,6 +1130,7 @@ export class DebugSession implements IDebugSession {
 	private shutdown(): void {
 		dispose(this.rawListeners);
 		if (this.raw) {
+			// Send out disconnect and immediatly dispose (do not wait for response) #127418
 			this.raw.disconnect({});
 			this.raw.dispose();
 			this.raw = undefined;

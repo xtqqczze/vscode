@@ -7,7 +7,7 @@ import { URI } from 'vs/base/common/uri';
 import type * as vscode from 'vscode';
 import * as typeConverters from 'vs/workbench/api/common/extHostTypeConverters';
 import * as types from 'vs/workbench/api/common/extHostTypes';
-import { IRawColorInfo, IWorkspaceEditDto, ICallHierarchyItemDto, IIncomingCallDto, IOutgoingCallDto } from 'vs/workbench/api/common/extHost.protocol';
+import { IRawColorInfo, IWorkspaceEditDto, ICallHierarchyItemDto, IIncomingCallDto, IOutgoingCallDto, ITypeHierarchyItemDto } from 'vs/workbench/api/common/extHost.protocol';
 import * as modes from 'vs/editor/common/modes';
 import * as search from 'vs/workbench/contrib/search/common/search';
 import { ApiCommand, ApiCommandArgument, ApiCommandResult, ExtHostCommands } from 'vs/workbench/api/common/extHostCommands';
@@ -323,7 +323,7 @@ const newCommands: ApiCommand[] = [
 	),
 	// --- inline hints
 	new ApiCommand(
-		'vscode.executeInlayHintProvider', '_executeInlayHintProvider', 'Execute inline hints provider',
+		'vscode.executeInlayHintProvider', '_executeInlayHintProvider', 'Execute inlay hints provider',
 		[ApiCommandArgument.Uri, ApiCommandArgument.Range],
 		new ApiCommandResult<modes.InlayHint[], vscode.InlayHint[]>('A promise that resolves to an array of Inlay objects', result => {
 			return result.map(typeConverters.InlayHint.to);
@@ -405,6 +405,22 @@ const newCommands: ApiCommand[] = [
 			).optional(),
 		],
 		ApiCommandResult.Void
+	),
+	// --- type hierarchy
+	new ApiCommand(
+		'vscode.prepareTypeHierarchy', '_executePrepareTypeHierarchy', 'Prepare type hierarchy at a position inside a document',
+		[ApiCommandArgument.Uri, ApiCommandArgument.Position],
+		new ApiCommandResult<ITypeHierarchyItemDto[], types.TypeHierarchyItem[]>('A TypeHierarchyItem or undefined', v => v.map(typeConverters.TypeHierarchyItem.to))
+	),
+	new ApiCommand(
+		'vscode.provideSupertypes', '_executeProvideSupertypes', 'Compute supertypes for an item',
+		[ApiCommandArgument.TypeHierarchyItem],
+		new ApiCommandResult<ITypeHierarchyItemDto[], types.TypeHierarchyItem[]>('A TypeHierarchyItem or undefined', v => v.map(typeConverters.TypeHierarchyItem.to))
+	),
+	new ApiCommand(
+		'vscode.provideSubtypes', '_executeProvideSubtypes', 'Compute subtypes for an item',
+		[ApiCommandArgument.TypeHierarchyItem],
+		new ApiCommandResult<ITypeHierarchyItemDto[], types.TypeHierarchyItem[]>('A TypeHierarchyItem or undefined', v => v.map(typeConverters.TypeHierarchyItem.to))
 	),
 ];
 

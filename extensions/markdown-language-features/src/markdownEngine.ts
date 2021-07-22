@@ -67,6 +67,7 @@ interface RenderEnv {
 }
 
 export class MarkdownEngine {
+
 	private md?: Promise<MarkdownIt>;
 
 	private _slugCount = new Map<string, number>();
@@ -129,6 +130,10 @@ export class MarkdownEngine {
 		return md;
 	}
 
+	public reloadPlugins() {
+		this.md = undefined;
+	}
+
 	private tokenizeDocument(
 		document: SkinnyTextDocument,
 		config: MarkdownItConfig,
@@ -186,7 +191,7 @@ export class MarkdownEngine {
 	}
 
 	private getConfig(resource?: vscode.Uri): MarkdownItConfig {
-		const config = vscode.workspace.getConfiguration('markdown', resource);
+		const config = vscode.workspace.getConfiguration('markdown', resource ?? null);
 		return {
 			breaks: config.get<boolean>('preview.breaks', false),
 			linkify: config.get<boolean>('preview.linkify', true),

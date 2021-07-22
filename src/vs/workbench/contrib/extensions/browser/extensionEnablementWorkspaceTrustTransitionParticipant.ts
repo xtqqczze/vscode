@@ -4,43 +4,47 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from 'vs/base/common/lifecycle';
-import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
-import { IWorkspaceTrustManagementService, IWorkspaceTrustTransitionParticipant } from 'vs/platform/workspace/common/workspaceTrust';
+import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustTransitionParticipant } from 'vs/platform/workspace/common/workspaceTrust';
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
+import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { IWorkbenchExtensionEnablementService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
 import { IExtensionService } from 'vs/workbench/services/extensions/common/extensions';
-import { isWorkspaceTrustEnabled } from 'vs/workbench/services/workspaces/common/workspaceTrust';
+import { IHostService } from 'vs/workbench/services/host/browser/host';
 
 export class ExtensionEnablementWorkspaceTrustTransitionParticipant extends Disposable implements IWorkbenchContribution {
 	constructor(
-		@IConfigurationService configurationService: IConfigurationService,
 		@IExtensionService extensionService: IExtensionService,
+		@IHostService hostService: IHostService,
+		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
 		@IWorkbenchExtensionEnablementService extensionEnablementService: IWorkbenchExtensionEnablementService,
+		@IWorkspaceTrustEnablementService workspaceTrustEnablementService: IWorkspaceTrustEnablementService,
 		@IWorkspaceTrustManagementService workspaceTrustManagementService: IWorkspaceTrustManagementService,
 	) {
 		super();
 
-		if (isWorkspaceTrustEnabled(configurationService)) {
+		if (workspaceTrustEnablementService.isWorkspaceTrustEnabled()) {
+			// The extension enablement participant will be registered only after the
+			// workspace trust state has been initialized. There is no need to execute
+			// the participant as part of the initialization process, as the workspace
+			// trust state is initialized before starting the extension host.
 			workspaceTrustManagementService.workspaceTrustInitialized.then(() => {
 				const workspaceTrustTransitionParticipant = new class implements IWorkspaceTrustTransitionParticipant {
 					async participate(trusted: boolean): Promise<void> {
 						if (trusted) {
 							// Untrusted -> Trusted
-							await extensionEnablementService.updateEnablementByWorkspaceTrustRequirement();
+							await extensionEnablementService.updateExtensionsEnablementsWhenWorkspaceTrustChanges();
 						} else {
 							// Trusted -> Untrusted
-							extensionService.stopExtensionHosts();
-							await extensionEnablementService.updateEnablementByWorkspaceTrustRequirement();
-							extensionService.startExtensionHosts();
+							if (environmentService.remoteAuthority) {
+								hostService.reload();
+							} else {
+								extensionService.stopExtensionHosts();
+								await extensionEnablementService.updateExtensionsEnablementsWhenWorkspaceTrustChanges();
+								extensionService.startExtensionHosts();
+							}
 						}
 					}
 				};
-
-				// If the workspace has already transitioned to a trusted state, we will manually run the
-				// workspace trust transition participants as they did not run when the transition happened.
-				if (workspaceTrustManagementService.isWorkpaceTrusted()) {
-					workspaceTrustTransitionParticipant.participate(true);
-				}
 
 				// Execute BEFORE the workspace trust transition completes
 				this._register(workspaceTrustManagementService.addWorkspaceTrustTransitionParticipant(workspaceTrustTransitionParticipant));

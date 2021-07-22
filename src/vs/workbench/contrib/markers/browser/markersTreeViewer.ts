@@ -44,17 +44,17 @@ import { applyCodeAction } from 'vs/editor/contrib/codeAction/codeActionCommands
 import { SeverityIcon } from 'vs/platform/severityIcon/common/severityIcon';
 import { CodeActionTriggerType } from 'vs/editor/common/modes';
 import { IOpenerService } from 'vs/platform/opener/common/opener';
-import { textLinkForeground } from 'vs/platform/theme/common/colorRegistry';
+import { textLinkActiveForeground, textLinkForeground } from 'vs/platform/theme/common/colorRegistry';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { OS, OperatingSystem } from 'vs/base/common/platform';
 import { IFileService } from 'vs/platform/files/common/files';
-import { domEvent } from 'vs/base/browser/event';
 import { StandardKeyboardEvent } from 'vs/base/browser/keyboardEvent';
 import { KeyCode } from 'vs/base/common/keyCodes';
 import { Progress } from 'vs/platform/progress/common/progress';
 import { ActionViewItem } from 'vs/base/browser/ui/actionbar/actionViewItems';
 import { Codicon } from 'vs/base/common/codicons';
 import { registerIcon } from 'vs/platform/theme/common/iconRegistry';
+import { DomEmitter } from 'vs/base/browser/event';
 
 interface IResourceMarkersTemplateData {
 	resourceLabel: IResourceLabel;
@@ -417,10 +417,10 @@ class MarkerWidget extends Disposable {
 					this._codeLink.setAttribute('href', codeLink);
 					this._codeLink.tabIndex = 0;
 
-					const onClick = Event.chain(domEvent(this._codeLink, 'click'))
+					const onClick = Event.chain(this._register(new DomEmitter(this._codeLink, 'click')).event)
 						.filter(e => ((this._clickModifierKey === 'meta' && e.metaKey) || (this._clickModifierKey === 'ctrl' && e.ctrlKey) || (this._clickModifierKey === 'alt' && e.altKey)))
 						.event;
-					const onEnterPress = Event.chain(domEvent(this._codeLink, 'keydown'))
+					const onEnterPress = Event.chain(this._register(new DomEmitter(this._codeLink, 'keydown')).event)
 						.map(e => new StandardKeyboardEvent(e))
 						.filter(e => e.keyCode === KeyCode.Enter)
 						.event;
@@ -909,7 +909,10 @@ export class ResourceDragAndDrop implements ITreeDragAndDrop<MarkerElement> {
 registerThemingParticipant((theme, collector) => {
 	const linkFg = theme.getColor(textLinkForeground);
 	if (linkFg) {
-		collector.addRule(`.markers-panel .markers-panel-container .tree-container .monaco-tl-contents .details-container a.code-link .marker-code > span:hover { color: ${linkFg}; }`);
-		collector.addRule(`.markers-panel .markers-panel-container .tree-container .monaco-list:focus .monaco-tl-contents .details-container a.code-link .marker-code > span:hover { color: inherit; }`);
+		collector.addRule(`.markers-panel .markers-panel-container .tree-container .monaco-tl-contents .details-container a.code-link .marker-code > span { color: ${linkFg}; }`);
+	}
+	const activeLinkFg = theme.getColor(textLinkActiveForeground);
+	if (activeLinkFg) {
+		collector.addRule(`.markers-panel .markers-panel-container .tree-container .monaco-tl-contents .details-container a.code-link .marker-code > span:hover { color: ${activeLinkFg}; }`);
 	}
 });

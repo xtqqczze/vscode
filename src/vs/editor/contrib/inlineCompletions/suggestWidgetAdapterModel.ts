@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { RunOnceScheduler } from 'vs/base/common/async';
 import { Event } from 'vs/base/common/event';
 import { toDisposable } from 'vs/base/common/lifecycle';
 import { IActiveCodeEditor } from 'vs/editor/browser/editorBrowser';
@@ -10,7 +11,7 @@ import { EditorOption } from 'vs/editor/common/config/editorOptions';
 import { Position } from 'vs/editor/common/core/position';
 import { Range } from 'vs/editor/common/core/range';
 import { CompletionItemInsertTextRule } from 'vs/editor/common/modes';
-import { BaseGhostTextWidgetModel, GhostText } from 'vs/editor/contrib/inlineCompletions/ghostTextWidget';
+import { BaseGhostTextWidgetModel, GhostText } from 'vs/editor/contrib/inlineCompletions/ghostText';
 import { inlineCompletionToGhostText, NormalizedInlineCompletion } from 'vs/editor/contrib/inlineCompletions/inlineCompletionsModel';
 import { SnippetParser } from 'vs/editor/contrib/snippet/snippetParser';
 import { SnippetSession } from 'vs/editor/contrib/snippet/snippetSession';
@@ -20,10 +21,23 @@ import { ISelectedSuggestion } from 'vs/editor/contrib/suggest/suggestWidget';
 export class SuggestWidgetAdapterModel extends BaseGhostTextWidgetModel {
 	private isSuggestWidgetVisible: boolean = false;
 	private currentGhostText: GhostText | undefined = undefined;
+	private _isActive: boolean = false;
+	private isShiftKeyPressed = false;
+	private currentCompletion: NormalizedInlineCompletion | undefined;
 
 	public override minReservedLineCount: number = 0;
 
-	public get isActive() { return this.isSuggestWidgetVisible; }
+	public get isActive() { return this._isActive; }
+
+	// This delay fixes an suggest widget issue when typing "." immediately restarts the suggestion session.
+	private setInactiveDelayed = this._register(new RunOnceScheduler(() => {
+		if (!this.isSuggestWidgetVisible) {
+			if (this.isActive) {
+				this._isActive = false;
+				this.onDidChangeEmitter.fire();
+			}
+		}
+	}, 100));
 
 	constructor(
 		editor: IActiveCodeEditor
@@ -41,15 +55,18 @@ export class SuggestWidgetAdapterModel extends BaseGhostTextWidgetModel {
 
 				this._register(suggestController.widget.value.onDidShow(() => {
 					this.isSuggestWidgetVisible = true;
+					this._isActive = true;
 					this.updateFromSuggestion();
 				}));
 				this._register(suggestController.widget.value.onDidHide(() => {
 					this.isSuggestWidgetVisible = false;
+					this.setInactiveDelayed.schedule();
 					this.minReservedLineCount = 0;
 					this.updateFromSuggestion();
 				}));
 				this._register(suggestController.widget.value.onDidFocus(() => {
 					this.isSuggestWidgetVisible = true;
+					this._isActive = true;
 					this.updateFromSuggestion();
 				}));
 			};
@@ -60,10 +77,30 @@ export class SuggestWidgetAdapterModel extends BaseGhostTextWidgetModel {
 		}
 		this.updateFromSuggestion();
 
+		this._register(this.editor.onDidChangeCursorPosition((e) => {
+			if (this.isSuggestionPreviewEnabled()) {
+				this.update();
+			}
+		}));
+
 		this._register(toDisposable(() => {
 			const suggestController = SuggestController.get(this.editor);
 			if (suggestController) {
 				suggestController.stopForceRenderingAbove();
+			}
+		}));
+
+		// See the command acceptAlternativeSelectedSuggestion that is bound to shift+tab
+		this._register(editor.onKeyDown(e => {
+			if (e.shiftKey && !this.isShiftKeyPressed) {
+				this.isShiftKeyPressed = true;
+				this.updateFromSuggestion();
+			}
+		}));
+		this._register(editor.onKeyUp(e => {
+			if (e.shiftKey && this.isShiftKeyPressed) {
+				this.isShiftKeyPressed = false;
+				this.updateFromSuggestion();
 			}
 		}));
 	}
@@ -75,7 +112,7 @@ export class SuggestWidgetAdapterModel extends BaseGhostTextWidgetModel {
 
 	private isSuggestionPreviewEnabled(): boolean {
 		const suggestOptions = this.editor.getOption(EditorOption.suggest);
-		return suggestOptions.showSuggestionPreview;
+		return suggestOptions.preview;
 	}
 
 	private updateFromSuggestion(): void {
@@ -99,24 +136,41 @@ export class SuggestWidgetAdapterModel extends BaseGhostTextWidgetModel {
 			getInlineCompletion(
 				suggestController,
 				this.editor.getPosition(),
-				focusedItem
+				focusedItem,
+				this.isShiftKeyPressed
 			)
 		);
 	}
 
 	private setCurrentInlineCompletion(completion: NormalizedInlineCompletion | undefined): void {
-		this.currentGhostText = completion
-			? (
-				inlineCompletionToGhostText(completion, this.editor.getModel()) ||
-				// Show an invisible ghost text to reserve space
-				{
-					lines: [],
-					position: completion.range.getEndPosition(),
-				}
-			) : undefined;
+		this.currentCompletion = completion;
+		this.update();
+	}
+
+	private update(): void {
+		const completion = this.currentCompletion;
+		const mode = this.editor.getOptions().get(EditorOption.suggest).previewMode;
+
+		this.setGhostText(
+			completion
+				? (
+					inlineCompletionToGhostText(completion, this.editor.getModel(), mode, this.editor.getPosition()) ||
+					// Show an invisible ghost text to reserve space
+					new GhostText(completion.range.endLineNumber, [], this.minReservedLineCount)
+				)
+				: undefined
+		);
+	}
+
+	private setGhostText(newGhostText: GhostText | undefined): void {
+		if (GhostText.equals(this.currentGhostText, newGhostText)) {
+			return;
+		}
+
+		this.currentGhostText = newGhostText;
 
 		if (this.currentGhostText && this.expanded) {
-			this.minReservedLineCount = Math.max(this.minReservedLineCount, this.currentGhostText.lines.length - 1);
+			this.minReservedLineCount = Math.max(this.minReservedLineCount, ...this.currentGhostText.parts.map(p => p.lines.length - 1));
 		}
 
 		const suggestController = SuggestController.get(this.editor);
@@ -138,7 +192,7 @@ export class SuggestWidgetAdapterModel extends BaseGhostTextWidgetModel {
 	}
 }
 
-function getInlineCompletion(suggestController: SuggestController, position: Position, suggestion: ISelectedSuggestion): NormalizedInlineCompletion {
+function getInlineCompletion(suggestController: SuggestController, position: Position, suggestion: ISelectedSuggestion, toggleMode: boolean): NormalizedInlineCompletion {
 	const item = suggestion.item;
 
 	if (Array.isArray(item.completion.additionalTextEdits)) {
@@ -161,7 +215,7 @@ function getInlineCompletion(suggestController: SuggestController, position: Pos
 		insertText = snippet.toString();
 	}
 
-	const info = suggestController.getOverwriteInfo(item, false);
+	const info = suggestController.getOverwriteInfo(item, toggleMode);
 	return {
 		text: insertText,
 		range: Range.fromPositions(

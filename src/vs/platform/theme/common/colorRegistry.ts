@@ -31,6 +31,7 @@ export const enum ColorTransformType {
 	Transparent,
 	OneOf,
 	LessProminent,
+	IfDefinedThenElse
 }
 
 export type ColorTransform =
@@ -38,7 +39,8 @@ export type ColorTransform =
 	| { op: ColorTransformType.Lighten; value: ColorValue; factor: number }
 	| { op: ColorTransformType.Transparent; value: ColorValue; factor: number }
 	| { op: ColorTransformType.OneOf; values: readonly ColorValue[] }
-	| { op: ColorTransformType.LessProminent; value: ColorValue; background: ColorValue; factor: number; transparency: number };
+	| { op: ColorTransformType.LessProminent; value: ColorValue; background: ColorValue; factor: number; transparency: number }
+	| { op: ColorTransformType.IfDefinedThenElse; if: ColorIdentifier; then: ColorValue, else: ColorValue };
 
 export interface ColorDefaults {
 	light: ColorValue | null;
@@ -355,8 +357,8 @@ export const editorActiveLinkForeground = registerColor('editorLink.activeForegr
 /**
  * Inline hints
  */
-export const editorInlayHintForeground = registerColor('editorInlayHint.foreground', { dark: editorWidgetBackground, light: editorWidgetForeground, hc: editorWidgetBackground }, nls.localize('editorInlayHintForeground', 'Foreground color of inline hints'));
-export const editorInlayHintBackground = registerColor('editorInlayHint.background', { dark: editorWidgetForeground, light: editorWidgetBackground, hc: editorWidgetForeground }, nls.localize('editorInlayHintBackground', 'Background color of inline hints'));
+export const editorInlayHintForeground = registerColor('editorInlayHint.foreground', { dark: transparent(badgeForeground, .8), light: transparent(badgeForeground, .8), hc: badgeForeground }, nls.localize('editorInlayHintForeground', 'Foreground color of inline hints'));
+export const editorInlayHintBackground = registerColor('editorInlayHint.background', { dark: transparent(badgeBackground, .6), light: transparent(badgeBackground, .3), hc: badgeBackground }, nls.localize('editorInlayHintBackground', 'Background color of inline hints'));
 
 /**
  * Editor lighbulb icon colors
@@ -387,15 +389,17 @@ export const listFocusForeground = registerColor('list.focusForeground', { dark:
 export const listFocusOutline = registerColor('list.focusOutline', { dark: focusBorder, light: focusBorder, hc: activeContrastBorder }, nls.localize('listFocusOutline', "List/Tree outline color for the focused item when the list/tree is active. An active list/tree has keyboard focus, an inactive does not."));
 export const listActiveSelectionBackground = registerColor('list.activeSelectionBackground', { dark: '#094771', light: '#0060C0', hc: null }, nls.localize('listActiveSelectionBackground', "List/Tree background color for the selected item when the list/tree is active. An active list/tree has keyboard focus, an inactive does not."));
 export const listActiveSelectionForeground = registerColor('list.activeSelectionForeground', { dark: Color.white, light: Color.white, hc: null }, nls.localize('listActiveSelectionForeground', "List/Tree foreground color for the selected item when the list/tree is active. An active list/tree has keyboard focus, an inactive does not."));
+export const listActiveSelectionIconForeground = registerColor('list.activeSelectionIconForeground', { dark: null, light: null, hc: null }, nls.localize('listActiveSelectionIconForeground', "List/Tree icon foreground color for the selected item when the list/tree is active. An active list/tree has keyboard focus, an inactive does not."));
 export const listInactiveSelectionBackground = registerColor('list.inactiveSelectionBackground', { dark: '#37373D', light: '#E4E6F1', hc: null }, nls.localize('listInactiveSelectionBackground', "List/Tree background color for the selected item when the list/tree is inactive. An active list/tree has keyboard focus, an inactive does not."));
 export const listInactiveSelectionForeground = registerColor('list.inactiveSelectionForeground', { dark: null, light: null, hc: null }, nls.localize('listInactiveSelectionForeground', "List/Tree foreground color for the selected item when the list/tree is inactive. An active list/tree has keyboard focus, an inactive does not."));
+export const listInactiveSelectionIconForeground = registerColor('list.inactiveSelectionIconForeground', { dark: null, light: null, hc: null }, nls.localize('listInactiveSelectionIconForeground', "List/Tree icon foreground color for the selected item when the list/tree is inactive. An active list/tree has keyboard focus, an inactive does not."));
 export const listInactiveFocusBackground = registerColor('list.inactiveFocusBackground', { dark: null, light: null, hc: null }, nls.localize('listInactiveFocusBackground', "List/Tree background color for the focused item when the list/tree is inactive. An active list/tree has keyboard focus, an inactive does not."));
 export const listInactiveFocusOutline = registerColor('list.inactiveFocusOutline', { dark: null, light: null, hc: null }, nls.localize('listInactiveFocusOutline', "List/Tree outline color for the focused item when the list/tree is inactive. An active list/tree has keyboard focus, an inactive does not."));
 export const listHoverBackground = registerColor('list.hoverBackground', { dark: '#2A2D2E', light: '#F0F0F0', hc: null }, nls.localize('listHoverBackground', "List/Tree background when hovering over items using the mouse."));
 export const listHoverForeground = registerColor('list.hoverForeground', { dark: null, light: null, hc: null }, nls.localize('listHoverForeground', "List/Tree foreground when hovering over items using the mouse."));
 export const listDropBackground = registerColor('list.dropBackground', { dark: '#062F4A', light: '#D6EBFF', hc: null }, nls.localize('listDropBackground', "List/Tree drag and drop background when moving items around using the mouse."));
 export const listHighlightForeground = registerColor('list.highlightForeground', { dark: '#18A3FF', light: '#0066BF', hc: focusBorder }, nls.localize('highlight', 'List/Tree foreground color of the match highlights when searching inside the list/tree.'));
-export const listFocusHighlightForeground = registerColor('list.focusHighlightForeground', { dark: listHighlightForeground, light: listHighlightForeground, hc: listHighlightForeground }, nls.localize('listFocusHighlightForeground', 'List/Tree foreground color of the match highlights on actively focused items when searching inside the list/tree.'));
+export const listFocusHighlightForeground = registerColor('list.focusHighlightForeground', { dark: listHighlightForeground, light: ifDefinedThenElse(listActiveSelectionBackground, listHighlightForeground, '#9DDDFF'), hc: listHighlightForeground }, nls.localize('listFocusHighlightForeground', 'List/Tree foreground color of the match highlights on actively focused items when searching inside the list/tree.'));
 export const listInvalidItemForeground = registerColor('list.invalidItemForeground', { dark: '#B89500', light: '#B89500', hc: '#B89500' }, nls.localize('invalidItemForeground', 'List/Tree foreground color for invalid items, for example an unresolved root in explorer.'));
 export const listErrorForeground = registerColor('list.errorForeground', { dark: '#F88070', light: '#B01011', hc: null }, nls.localize('listErrorForeground', 'Foreground color of list items containing errors.'));
 export const listWarningForeground = registerColor('list.warningForeground', { dark: '#CCA700', light: '#855F00', hc: null }, nls.localize('listWarningForeground', 'Foreground color of list items containing warnings.'));
@@ -413,7 +417,8 @@ export const listDeemphasizedForeground = registerColor('list.deemphasizedForegr
  */
 export const _deprecatedQuickInputListFocusBackground = registerColor('quickInput.list.focusBackground', { dark: null, light: null, hc: null }, '', undefined, nls.localize('quickInput.list.focusBackground deprecation', "Please use quickInputList.focusBackground instead"));
 export const quickInputListFocusForeground = registerColor('quickInputList.focusForeground', { dark: listActiveSelectionForeground, light: listActiveSelectionForeground, hc: listActiveSelectionForeground }, nls.localize('quickInput.listFocusForeground', "Quick picker foreground color for the focused item."));
-export const quickInputListFocusBackground = registerColor('quickInputList.focusBackground', { dark: oneOf(_deprecatedQuickInputListFocusBackground, listActiveSelectionBackground, '#062F4A'), light: oneOf(_deprecatedQuickInputListFocusBackground, listActiveSelectionBackground, '#D6EBFF'), hc: null }, nls.localize('quickInput.listFocusBackground', "Quick picker background color for the focused item."));
+export const quickInputListFocusIconForeground = registerColor('quickInputList.focusIconForeground', { dark: listActiveSelectionIconForeground, light: listActiveSelectionIconForeground, hc: listActiveSelectionIconForeground }, nls.localize('quickInput.listFocusIconForeground', "Quick picker icon foreground color for the focused item."));
+export const quickInputListFocusBackground = registerColor('quickInputList.focusBackground', { dark: oneOf(_deprecatedQuickInputListFocusBackground, listActiveSelectionBackground), light: oneOf(_deprecatedQuickInputListFocusBackground, listActiveSelectionBackground), hc: null }, nls.localize('quickInput.listFocusBackground', "Quick picker background color for the focused item."));
 
 /**
  * Menu colors
@@ -526,6 +531,9 @@ export function executeTransform(transform: ColorTransform, theme: IColorTheme) 
 			}
 			return undefined;
 
+		case ColorTransformType.IfDefinedThenElse:
+			return resolveColorValue(theme.defines(transform.if) ? transform.then : transform.else, theme);
+
 		case ColorTransformType.LessProminent:
 			const from = resolveColorValue(transform.value, theme);
 			if (!from) {
@@ -559,6 +567,10 @@ export function transparent(colorValue: ColorValue, factor: number): ColorTransf
 
 export function oneOf(...colorValues: ColorValue[]): ColorTransform {
 	return { op: ColorTransformType.OneOf, values: colorValues };
+}
+
+export function ifDefinedThenElse(ifArg: ColorIdentifier, thenArg: ColorValue, elseArg: ColorValue): ColorTransform {
+	return { op: ColorTransformType.IfDefinedThenElse, if: ifArg, then: thenArg, else: elseArg };
 }
 
 function lessProminent(colorValue: ColorValue, backgroundColorValue: ColorValue, factor: number, transparency: number): ColorTransform {

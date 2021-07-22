@@ -59,6 +59,7 @@ import { cwd } from 'vs/base/common/process';
 import { IProtocolMainService } from 'vs/platform/protocol/electron-main/protocol';
 import { ProtocolMainService } from 'vs/platform/protocol/electron-main/protocolMainService';
 import { Promises } from 'vs/base/common/async';
+import { toDisposable } from 'vs/base/common/lifecycle';
 
 /**
  * The main VS Code entry point.
@@ -209,7 +210,7 @@ class CodeMain {
 			// Environment service (paths)
 			Promise.all<string | undefined>([
 				environmentMainService.extensionsPath,
-				environmentMainService.nodeCachedDataDir,
+				environmentMainService.codeCachePath,
 				environmentMainService.logsPath,
 				environmentMainService.globalStorageHome.fsPath,
 				environmentMainService.workspaceStorageHome.fsPath,
@@ -339,6 +340,9 @@ class CodeMain {
 			throw new ExpectedError('Sent env to running instance. Terminating...');
 		}
 
+		const lockFile = await this.createLockfile(environmentMainService);
+		once(lifecycleMainService.onWillShutdown)(() => lockFile.dispose());
+
 		// Print --status usage info
 		if (environmentMainService.args.status) {
 			logService.warn('Warning: The --status argument can only be used if Code is already running. Please run it again after Code has started.');
@@ -375,6 +379,7 @@ class CodeMain {
 			buttons: [mnemonicButtonLabel(localize({ key: 'close', comment: ['&& denotes a mnemonic'] }, "&&Close"))],
 			message,
 			detail,
+			defaultId: 0,
 			noLink: true
 		});
 	}
@@ -416,6 +421,18 @@ class CodeMain {
 		}
 
 		lifecycleMainService.kill(exitCode);
+	}
+
+	private async createLockfile(env: IEnvironmentMainService) {
+		await FSPromises.writeFile(env.mainLockfile, String(process.pid));
+
+		return toDisposable(() => {
+			try {
+				unlinkSync(env.mainLockfile);
+			} catch {
+				// ignored
+			}
+		});
 	}
 
 	//#region Command line arguments utilities

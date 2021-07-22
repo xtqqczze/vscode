@@ -16,7 +16,7 @@ import { CallStackView } from 'vs/workbench/contrib/debug/browser/callStackView'
 import { Extensions as WorkbenchExtensions, IWorkbenchContributionsRegistry } from 'vs/workbench/common/contributions';
 import {
 	IDebugService, VIEWLET_ID, DEBUG_PANEL_ID, CONTEXT_IN_DEBUG_MODE, INTERNAL_CONSOLE_OPTIONS_SCHEMA,
-	CONTEXT_DEBUG_STATE, VARIABLES_VIEW_ID, CALLSTACK_VIEW_ID, WATCH_VIEW_ID, BREAKPOINTS_VIEW_ID, LOADED_SCRIPTS_VIEW_ID, CONTEXT_LOADED_SCRIPTS_SUPPORTED, CONTEXT_CALLSTACK_ITEM_TYPE, CONTEXT_RESTART_FRAME_SUPPORTED, CONTEXT_JUMP_TO_CURSOR_SUPPORTED, CONTEXT_DEBUG_UX, BREAKPOINT_EDITOR_CONTRIBUTION_ID, REPL_VIEW_ID, CONTEXT_BREAKPOINTS_EXIST, EDITOR_CONTRIBUTION_ID, CONTEXT_DEBUGGERS_AVAILABLE, CONTEXT_SET_VARIABLE_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_CHANGES_SUPPORTED, CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT, getStateLabel, State, CONTEXT_WATCH_ITEM_TYPE, CONTEXT_STACK_FRAME_SUPPORTS_RESTART, CONTEXT_BREAK_WHEN_VALUE_IS_READ_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_IS_ACCESSED_SUPPORTED, CONTEXT_FOCUSED_SESSION_IS_ATTACH, CONTEXT_TERMINATE_DEBUGGEE_SUPPORTED,
+	CONTEXT_DEBUG_STATE, VARIABLES_VIEW_ID, CALLSTACK_VIEW_ID, WATCH_VIEW_ID, BREAKPOINTS_VIEW_ID, LOADED_SCRIPTS_VIEW_ID, CONTEXT_LOADED_SCRIPTS_SUPPORTED, CONTEXT_CALLSTACK_ITEM_TYPE, CONTEXT_RESTART_FRAME_SUPPORTED, CONTEXT_JUMP_TO_CURSOR_SUPPORTED, CONTEXT_DEBUG_UX, BREAKPOINT_EDITOR_CONTRIBUTION_ID, REPL_VIEW_ID, CONTEXT_BREAKPOINTS_EXIST, EDITOR_CONTRIBUTION_ID, CONTEXT_DEBUGGERS_AVAILABLE, CONTEXT_SET_VARIABLE_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_CHANGES_SUPPORTED, CONTEXT_VARIABLE_EVALUATE_NAME_PRESENT, getStateLabel, State, CONTEXT_WATCH_ITEM_TYPE, CONTEXT_STACK_FRAME_SUPPORTS_RESTART, CONTEXT_BREAK_WHEN_VALUE_IS_READ_SUPPORTED, CONTEXT_BREAK_WHEN_VALUE_IS_ACCESSED_SUPPORTED, CONTEXT_FOCUSED_SESSION_IS_ATTACH, CONTEXT_TERMINATE_DEBUGGEE_SUPPORTED, DISASSEMBLY_VIEW_ID,
 } from 'vs/workbench/contrib/debug/common/debug';
 import { DebugToolBar } from 'vs/workbench/contrib/debug/browser/debugToolBar';
 import { DebugService } from 'vs/workbench/contrib/debug/browser/debugService';
@@ -50,6 +50,10 @@ import { registerColors } from 'vs/workbench/contrib/debug/browser/debugColors';
 import { DebugEditorContribution } from 'vs/workbench/contrib/debug/browser/debugEditorContribution';
 import { FileAccess } from 'vs/base/common/network';
 import * as icons from 'vs/workbench/contrib/debug/browser/debugIcons';
+import { EditorExtensions } from 'vs/workbench/common/editor';
+import { DisassemblyView, DisassemblyViewContribution } from 'vs/workbench/contrib/debug/browser/disassemblyView';
+import { EditorPaneDescriptor, IEditorPaneRegistry } from 'vs/workbench/browser/editor';
+import { DisassemblyViewInput } from 'vs/workbench/contrib/debug/common/disassemblyViewInput';
 
 const debugCategory = nls.localize('debugCategory', "Debug");
 registerColors();
@@ -64,6 +68,7 @@ if (isWeb) {
 Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(DebugToolBar, LifecyclePhase.Restored);
 Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(DebugContentProvider, LifecyclePhase.Eventually);
 Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(StatusBarColorProvider, LifecyclePhase.Eventually);
+Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).registerWorkbenchContribution(DisassemblyViewContribution, LifecyclePhase.Eventually);
 
 // Register Quick Access
 Registry.as<IQuickAccessRegistry>(QuickAccessExtensions.Quickaccess).registerQuickAccessProvider({
@@ -165,8 +170,8 @@ if (isMacintosh) {
 		});
 	};
 
-	registerTouchBarEntry(DEBUG_START_COMMAND_ID, DEBUG_START_LABEL, 0, CONTEXT_IN_DEBUG_MODE.toNegated(), FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/continue-tb.png', require));
-	registerTouchBarEntry(DEBUG_RUN_COMMAND_ID, DEBUG_RUN_LABEL, 1, CONTEXT_IN_DEBUG_MODE.toNegated(), FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/continue-without-debugging-tb.png', require));
+	registerTouchBarEntry(DEBUG_RUN_COMMAND_ID, DEBUG_RUN_LABEL, 0, CONTEXT_IN_DEBUG_MODE.toNegated(), FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/continue-tb.png', require));
+	registerTouchBarEntry(DEBUG_START_COMMAND_ID, DEBUG_START_LABEL, 1, CONTEXT_IN_DEBUG_MODE.toNegated(), FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/run-with-debugging-tb.png', require));
 	registerTouchBarEntry(CONTINUE_ID, CONTINUE_LABEL, 0, CONTEXT_DEBUG_STATE.isEqualTo('stopped'), FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/continue-tb.png', require));
 	registerTouchBarEntry(PAUSE_ID, PAUSE_LABEL, 1, ContextKeyExpr.and(CONTEXT_IN_DEBUG_MODE, ContextKeyExpr.notEquals('debugState', 'stopped')), FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/pause-tb.png', require));
 	registerTouchBarEntry(STEP_OVER_ID, STEP_OVER_LABEL, 2, CONTEXT_IN_DEBUG_MODE, FileAccess.asFileUri('vs/workbench/contrib/debug/browser/media/stepover-tb.png', require));
@@ -177,6 +182,17 @@ if (isMacintosh) {
 }
 
 // Debug menu
+
+MenuRegistry.appendMenuItem(MenuId.MenubarMainMenu, {
+	submenu: MenuId.MenubarDebugMenu,
+	title: {
+		value: 'Run',
+		original: 'Run',
+		mnemonicTitle: nls.localize({ key: 'mRun', comment: ['&& denotes a mnemonic'] }, "&&Run")
+	},
+	when: ContextKeyExpr.or(CONTEXT_DEBUGGERS_AVAILABLE),
+	order: 6
+});
 
 MenuRegistry.appendMenuItem(MenuId.MenubarDebugMenu, {
 	group: '1_debug',
@@ -361,6 +377,13 @@ viewsRegistry.registerViews([{ id: CALLSTACK_VIEW_ID, name: nls.localize('callSt
 viewsRegistry.registerViews([{ id: BREAKPOINTS_VIEW_ID, name: nls.localize('breakpoints', "Breakpoints"), containerIcon: icons.breakpointsViewIcon, ctorDescriptor: new SyncDescriptor(BreakpointsView), order: 40, weight: 20, canToggleVisibility: true, canMoveView: true, focusCommand: { id: 'workbench.debug.action.focusBreakpointsView' }, when: ContextKeyExpr.or(CONTEXT_BREAKPOINTS_EXIST, CONTEXT_DEBUG_UX.isEqualTo('default')) }], viewContainer);
 viewsRegistry.registerViews([{ id: WelcomeView.ID, name: WelcomeView.LABEL, containerIcon: icons.runViewIcon, ctorDescriptor: new SyncDescriptor(WelcomeView), order: 1, weight: 40, canToggleVisibility: true, when: CONTEXT_DEBUG_UX.isEqualTo('simple') }], viewContainer);
 viewsRegistry.registerViews([{ id: LOADED_SCRIPTS_VIEW_ID, name: nls.localize('loadedScripts', "Loaded Scripts"), containerIcon: icons.loadedScriptsViewIcon, ctorDescriptor: new SyncDescriptor(LoadedScriptsView), order: 35, weight: 5, canToggleVisibility: true, canMoveView: true, collapsed: true, when: ContextKeyExpr.and(CONTEXT_LOADED_SCRIPTS_SUPPORTED, CONTEXT_DEBUG_UX.isEqualTo('default')) }], viewContainer);
+
+// Register disassembly view
+
+Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+	EditorPaneDescriptor.create(DisassemblyView, DISASSEMBLY_VIEW_ID, nls.localize('disassembly', "Disassembly")),
+	[new SyncDescriptor(DisassemblyViewInput)]
+);
 
 // Register configuration
 const configurationRegistry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);

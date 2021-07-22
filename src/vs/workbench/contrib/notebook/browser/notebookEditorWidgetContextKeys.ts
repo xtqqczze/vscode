@@ -43,7 +43,7 @@ export class NotebookEditorContextKeys {
 
 		this._disposables.add(_editor.onDidChangeModel(this._handleDidChangeModel, this));
 		this._disposables.add(_notebookKernelService.onDidAddKernel(this._updateKernelContext, this));
-		this._disposables.add(_notebookKernelService.onDidChangeNotebookKernelBinding(this._updateKernelContext, this));
+		this._disposables.add(_notebookKernelService.onDidChangeSelectedNotebooks(this._updateKernelContext, this));
 		this._disposables.add(_editor.notebookOptions.onDidChangeOptions(() => {
 			this._updateForNotebookOptions();
 		}));
@@ -138,13 +138,14 @@ export class NotebookEditorContextKeys {
 			return;
 		}
 
-		const { selected, all } = this._notebookKernelService.getMatchingKernel(this._editor.viewModel.notebookDocument);
+		const { selected, all } = this._notebookKernelService.getMatchingKernel(this._editor.textModel);
 		this._notebookKernelCount.set(all.length);
 		this._interruptibleKernel.set(selected?.implementsInterrupt ?? false);
 		this._notebookKernelSelected.set(Boolean(selected));
 	}
 
 	private _updateForNotebookOptions(): void {
-		this._useConsolidatedOutputButton.set(this._editor.notebookOptions.getLayoutConfiguration().consolidatedOutputButton);
+		const layout = this._editor.notebookOptions.getLayoutConfiguration();
+		this._useConsolidatedOutputButton.set(layout.consolidatedOutputButton);
 	}
 }

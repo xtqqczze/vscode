@@ -16,7 +16,7 @@ import { ILogService } from 'vs/platform/log/common/log';
 import { IStringDictionary } from 'vs/base/common/collections';
 import { FormattingOptions } from 'vs/base/common/jsonFormatter';
 import { URI } from 'vs/base/common/uri';
-import { joinPath, isEqualOrParent } from 'vs/base/common/resources';
+import { joinPath, isEqualOrParent, IExtUri } from 'vs/base/common/resources';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { distinct } from 'vs/base/common/arrays';
 import { isArray, isString, isObject } from 'vs/base/common/types';
@@ -132,9 +132,14 @@ export const enum SyncResource {
 }
 export const ALL_SYNC_RESOURCES: SyncResource[] = [SyncResource.Settings, SyncResource.Keybindings, SyncResource.Snippets, SyncResource.Extensions, SyncResource.GlobalState];
 
+export function getLastSyncResourceUri(syncResource: SyncResource, environmentService: IEnvironmentService, extUri: IExtUri): URI {
+	return extUri.joinPath(environmentService.userDataSyncHome, syncResource, `lastSync${syncResource}.json`);
+}
+
 export interface IUserDataManifest {
-	latest?: Record<ServerResource, string>
-	session: string;
+	readonly latest?: Record<ServerResource, string>
+	readonly session: string;
+	readonly ref: string;
 }
 
 export interface IResourceRefHandle {
@@ -163,7 +168,7 @@ export interface IUserDataSyncStoreClient {
 	setAuthToken(token: string, type: string): void;
 
 	// Sync requests
-	manifest(headers?: IHeaders): Promise<IUserDataManifest | null>;
+	manifest(oldValue: IUserDataManifest | null, headers?: IHeaders): Promise<IUserDataManifest | null>;
 	read(resource: ServerResource, oldValue: IUserData | null, headers?: IHeaders): Promise<IUserData>;
 	write(resource: ServerResource, content: string, ref: string | null, headers?: IHeaders): Promise<string>;
 	clear(): Promise<void>;
@@ -203,7 +208,7 @@ export function createSyncHeaders(executionId: string): IHeaders {
 
 // #region User Data Sync Error
 
-export enum UserDataSyncErrorCode {
+export const enum UserDataSyncErrorCode {
 	// Client Errors (>= 400 )
 	Unauthorized = 'Unauthorized', /* 401 */
 	Conflict = 'Conflict', /* 409 */
@@ -219,7 +224,11 @@ export enum UserDataSyncErrorCode {
 	RequestFailed = 'RequestFailed',
 	RequestCanceled = 'RequestCanceled',
 	RequestTimeout = 'RequestTimeout',
+	RequestProtocolNotSupported = 'RequestProtocolNotSupported',
+	RequestPathNotEscaped = 'RequestPathNotEscaped',
+	RequestHeadersNotObject = 'RequestHeadersNotObject',
 	NoRef = 'NoRef',
+	EmptyResponse = 'EmptyResponse',
 	TurnedOff = 'TurnedOff',
 	SessionExpired = 'SessionExpired',
 	ServiceChanged = 'ServiceChanged',
@@ -250,7 +259,7 @@ export class UserDataSyncError extends Error {
 }
 
 export class UserDataSyncStoreError extends UserDataSyncError {
-	constructor(message: string, readonly url: string, code: UserDataSyncErrorCode, operationId: string | undefined) {
+	constructor(message: string, readonly url: string, code: UserDataSyncErrorCode, readonly serverCode: number | undefined, operationId: string | undefined) {
 		super(message, code, undefined, operationId);
 	}
 }
@@ -453,7 +462,7 @@ export interface IUserDataSyncService {
 	readonly onDidResetRemote: Event<void>;
 	readonly onDidResetLocal: Event<void>;
 
-	createSyncTask(disableCache?: boolean): Promise<ISyncTask>;
+	createSyncTask(manifest: IUserDataManifest | null, disableCache?: boolean): Promise<ISyncTask>;
 	createManualSyncTask(): Promise<IManualSyncTask>;
 
 	replace(uri: URI): Promise<void>;

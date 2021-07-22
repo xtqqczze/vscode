@@ -78,6 +78,15 @@ export interface IFileService {
 	readonly onDidFilesChange: Event<FileChangesEvent>;
 
 	/**
+	 *
+	 * Raw access to all file events emitted from file system providers.
+	 *
+	 * @deprecated use this method only if you know what you are doing. use the other watch related events
+	 * and APIs for more efficient file watching.
+	 */
+	readonly onDidChangeFilesRaw: Event<IRawFileChangesEvent>;
+
+	/**
 	 * An event that is fired upon successful completion of a certain file operation.
 	 */
 	readonly onDidRunOperation: Event<FileOperationEvent>;
@@ -639,40 +648,38 @@ export interface IFileChange {
 	readonly resource: URI;
 }
 
-export class FileChangesEvent {
+export interface IRawFileChangesEvent {
 
 	/**
-	 * @deprecated use the `contains()` or `affects` method to efficiently find
-	 * out if the event relates to a given resource. these methods ensure:
-	 * - that there is no expensive lookup needed (by using a `TernarySearchTree`)
-	 * - correctly handles `FileChangeType.DELETED` events
+	 * @deprecated use `FileChangesEvent` instead unless you know what you are doing
 	 */
 	readonly changes: readonly IFileChange[];
+}
+
+export class FileChangesEvent {
 
 	private readonly added: TernarySearchTree<URI, IFileChange> | undefined = undefined;
 	private readonly updated: TernarySearchTree<URI, IFileChange> | undefined = undefined;
 	private readonly deleted: TernarySearchTree<URI, IFileChange> | undefined = undefined;
 
-	constructor(changes: readonly IFileChange[], private readonly ignorePathCasing: boolean) {
-		this.changes = changes;
-
+	constructor(changes: readonly IFileChange[], ignorePathCasing: boolean) {
 		for (const change of changes) {
 			switch (change.type) {
 				case FileChangeType.ADDED:
 					if (!this.added) {
-						this.added = TernarySearchTree.forUris<IFileChange>(() => this.ignorePathCasing);
+						this.added = TernarySearchTree.forUris<IFileChange>(() => ignorePathCasing);
 					}
 					this.added.set(change.resource, change);
 					break;
 				case FileChangeType.UPDATED:
 					if (!this.updated) {
-						this.updated = TernarySearchTree.forUris<IFileChange>(() => this.ignorePathCasing);
+						this.updated = TernarySearchTree.forUris<IFileChange>(() => ignorePathCasing);
 					}
 					this.updated.set(change.resource, change);
 					break;
 				case FileChangeType.DELETED:
 					if (!this.deleted) {
-						this.deleted = TernarySearchTree.forUris<IFileChange>(() => this.ignorePathCasing);
+						this.deleted = TernarySearchTree.forUris<IFileChange>(() => ignorePathCasing);
 					}
 					this.deleted.set(change.resource, change);
 					break;
@@ -742,30 +749,10 @@ export class FileChangesEvent {
 	}
 
 	/**
-	 * @deprecated use the `contains()` method to efficiently find out if the event
-	 * relates to a given resource. this method ensures:
-	 * - that there is no expensive lookup needed by using a `TernarySearchTree`
-	 * - correctly handles `FileChangeType.DELETED` events
-	 */
-	getAdded(): IFileChange[] {
-		return this.getOfType(FileChangeType.ADDED);
-	}
-
-	/**
 	 * Returns if this event contains added files.
 	 */
 	gotAdded(): boolean {
 		return !!this.added;
-	}
-
-	/**
-	 * @deprecated use the `contains()` method to efficiently find out if the event
-	 * relates to a given resource. this method ensures:
-	 * - that there is no expensive lookup needed by using a `TernarySearchTree`
-	 * - correctly handles `FileChangeType.DELETED` events
-	 */
-	getDeleted(): IFileChange[] {
-		return this.getOfType(FileChangeType.DELETED);
 	}
 
 	/**
@@ -776,44 +763,28 @@ export class FileChangesEvent {
 	}
 
 	/**
-	 * @deprecated use the `contains()` method to efficiently find out if the event
-	 * relates to a given resource. this method ensures:
-	 * - that there is no expensive lookup needed by using a `TernarySearchTree`
-	 * - correctly handles `FileChangeType.DELETED` events
-	 */
-	getUpdated(): IFileChange[] {
-		return this.getOfType(FileChangeType.UPDATED);
-	}
-
-	/**
 	 * Returns if this event contains updated files.
 	 */
 	gotUpdated(): boolean {
 		return !!this.updated;
 	}
 
-	private getOfType(type: FileChangeType): IFileChange[] {
-		const changes: IFileChange[] = [];
-
-		const eventsForType = type === FileChangeType.ADDED ? this.added : type === FileChangeType.UPDATED ? this.updated : this.deleted;
-		if (eventsForType) {
-			for (const [, change] of eventsForType) {
-				changes.push(change);
-			}
-		}
-
-		return changes;
-	}
-
 	/**
-	 * @deprecated use the `contains()` method to efficiently find out if the event
-	 * relates to a given resource. this method ensures:
-	 * - that there is no expensive lookup needed by using a `TernarySearchTree`
+	 * @deprecated use the `contains` or `affects` method to efficiently find
+	 * out if the event relates to a given resource. these methods ensure:
+	 * - that there is no expensive lookup needed (by using a `TernarySearchTree`)
 	 * - correctly handles `FileChangeType.DELETED` events
 	 */
-	filter(filterFn: (change: IFileChange) => boolean): FileChangesEvent {
-		return new FileChangesEvent(this.changes.filter(change => filterFn(change)), this.ignorePathCasing);
-	}
+	get rawAdded(): TernarySearchTree<URI, IFileChange> | undefined { return this.added; }
+
+	/**
+	 * @deprecated use the `contains` or `affects` method to efficiently find
+	 * out if the event relates to a given resource. these methods ensure:
+	 * - that there is no expensive lookup needed (by using a `TernarySearchTree`)
+	 * - correctly handles `FileChangeType.DELETED` events
+	 */
+	get rawDeleted(): TernarySearchTree<URI, IFileChange> | undefined { return this.deleted; }
+
 }
 
 export function isParent(path: string, candidate: string, ignoreCase?: boolean): boolean {

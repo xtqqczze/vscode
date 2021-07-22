@@ -36,7 +36,7 @@ import { ILocalizationsService } from 'vs/platform/localizations/common/localiza
 import { combinedDisposable, Disposable, toDisposable } from 'vs/base/common/lifecycle';
 import { DownloadService } from 'vs/platform/download/common/downloadService';
 import { IDownloadService } from 'vs/platform/download/common/download';
-import { NodeCachedDataCleaner } from 'vs/code/electron-browser/sharedProcess/contrib/nodeCachedDataCleaner';
+import { CodeCacheCleaner } from 'vs/code/electron-browser/sharedProcess/contrib/codeCacheCleaner';
 import { LanguagePackCachedDataCleaner } from 'vs/code/electron-browser/sharedProcess/contrib/languagePackCachedDataCleaner';
 import { StorageDataCleaner } from 'vs/code/electron-browser/sharedProcess/contrib/storageDataCleaner';
 import { LogsDataCleaner } from 'vs/code/electron-browser/sharedProcess/contrib/logsDataCleaner';
@@ -131,7 +131,7 @@ class SharedProcessMain extends Disposable {
 
 		// Instantiate Contributions
 		this._register(combinedDisposable(
-			instantiationService.createInstance(NodeCachedDataCleaner, this.configuration.nodeCachedDataDir),
+			instantiationService.createInstance(CodeCacheCleaner, this.configuration.codeCachePath),
 			instantiationService.createInstance(LanguagePackCachedDataCleaner),
 			instantiationService.createInstance(StorageDataCleaner, this.configuration.backupWorkspacesPath),
 			instantiationService.createInstance(LogsDataCleaner),
@@ -238,7 +238,7 @@ class SharedProcessMain extends Disposable {
 		services.set(ITelemetryService, telemetryService);
 
 		// Custom Endpoint Telemetry
-		const customEndpointTelemetryService = new CustomEndpointTelemetryService(configurationService, telemetryService);
+		const customEndpointTelemetryService = new CustomEndpointTelemetryService(configurationService, telemetryService, loggerService, environmentService);
 		services.set(ICustomEndpointTelemetryService, customEndpointTelemetryService);
 
 		// Extension Management

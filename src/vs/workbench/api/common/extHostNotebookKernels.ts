@@ -5,7 +5,7 @@
 
 import { Emitter } from 'vs/base/common/event';
 import { Disposable, DisposableStore } from 'vs/base/common/lifecycle';
-import { ExtHostNotebookKernelsShape, IMainContext, INotebookKernelDto2, MainContext, MainThreadNotebookDocumentsShape, MainThreadNotebookKernelsShape } from 'vs/workbench/api/common/extHost.protocol';
+import { CellExecuteEditDto, ExtHostNotebookKernelsShape, IMainContext, INotebookKernelDto2, MainContext, MainThreadNotebookKernelsShape, NotebookOutputDto } from 'vs/workbench/api/common/extHost.protocol';
 import * as vscode from 'vscode';
 import { ExtHostNotebookController } from 'vs/workbench/api/common/extHostNotebook';
 import { ExtensionIdentifier, IExtensionDescription } from 'vs/platform/extensions/common/extensions';
@@ -16,7 +16,7 @@ import { asWebviewUri } from 'vs/workbench/api/common/shared/webview';
 import { ResourceMap } from 'vs/base/common/map';
 import { timeout } from 'vs/base/common/async';
 import { ExtHostCell, ExtHostNotebookDocument } from 'vs/workbench/api/common/extHostNotebookDocument';
-import { CellEditType, IImmediateCellEditOperation, IOutputDto, NotebookCellExecutionState, NullablePartialNotebookCellInternalMetadata } from 'vs/workbench/contrib/notebook/common/notebookCommon';
+import { CellEditType, NotebookCellExecutionState, NullablePartialNotebookCellInternalMetadata } from 'vs/workbench/contrib/notebook/common/notebookCommon';
 import { CancellationTokenSource } from 'vs/base/common/cancellation';
 import { asArray } from 'vs/base/common/arrays';
 import { ILogService } from 'vs/platform/log/common/log';
@@ -40,15 +40,15 @@ export class ExtHostNotebookKernels implements ExtHostNotebookKernelsShape {
 	private _handlePool: number = 0;
 
 	constructor(
-		private readonly _mainContext: IMainContext,
+		mainContext: IMainContext,
 		private readonly _initData: IExtHostInitDataService,
 		private readonly _extHostNotebook: ExtHostNotebookController,
 		@ILogService private readonly _logService: ILogService,
 	) {
-		this._proxy = _mainContext.getProxy(MainContext.MainThreadNotebookKernels);
+		this._proxy = mainContext.getProxy(MainContext.MainThreadNotebookKernels);
 	}
 
-	createNotebookController(extension: IExtensionDescription, id: string, viewType: string, label: string, handler?: vscode.NotebookExecuteHandler, preloads?: vscode.NotebookRendererScript[]): vscode.NotebookController {
+	createNotebookController(extension: IExtensionDescription, id: string, viewType: string, label: string, handler?: (cells: vscode.NotebookCell[], notebook: vscode.NotebookDocument, controller: vscode.NotebookController) => void | Thenable<void>, preloads?: vscode.NotebookRendererScript[]): vscode.NotebookController {
 
 		for (let data of this._kernelData.values()) {
 			if (data.controller.id === id && ExtensionIdentifier.equals(extension.identifier, data.extensionId)) {
@@ -80,10 +80,9 @@ export class ExtHostNotebookKernels implements ExtHostNotebookKernelsShape {
 		};
 
 		//
-		let _executeHandler: vscode.NotebookExecuteHandler = handler ?? _defaultExecutHandler;
+		let _executeHandler = handler ?? _defaultExecutHandler;
 		let _interruptHandler: ((this: vscode.NotebookController, notebook: vscode.NotebookDocument) => void | Thenable<void>) | undefined;
 
-		// todo@jrieken the selector needs to be massaged
 		this._proxy.$addKernel(handle, data).catch(err => {
 			// this can happen when a kernel with that ID is already registered
 			console.log(err);
@@ -111,9 +110,8 @@ export class ExtHostNotebookKernels implements ExtHostNotebookKernelsShape {
 
 		const controller: vscode.NotebookController = {
 			get id() { return id; },
-			get viewType() { return data.notebookType; },
 			get notebookType() { return data.notebookType; },
-			onDidChangeNotebookAssociation: onDidChangeSelection.event,
+			onDidChangeSelectedNotebooks: onDidChangeSelection.event,
 			get label() {
 				return data.label;
 			},
@@ -140,13 +138,6 @@ export class ExtHostNotebookKernels implements ExtHostNotebookKernelsShape {
 			},
 			set supportedLanguages(value) {
 				data.supportedLanguages = value;
-				_update();
-			},
-			get hasExecutionOrder() {
-				return data.supportsExecutionOrder ?? false;
-			},
-			set hasExecutionOrder(value) {
-				data.supportsExecutionOrder = value;
 				_update();
 			},
 			get supportsExecutionOrder() {
@@ -295,10 +286,6 @@ export class ExtHostNotebookKernels implements ExtHostNotebookKernelsShape {
 		}
 
 		const editor = this._extHostNotebook.getEditorById(editorId);
-		if (!editor) {
-			throw new Error(`send message for UNKNOWN editor: ${editorId}`);
-		}
-
 		obj.onDidReceiveMessage.fire(Object.freeze({ editor: editor.apiEditor, message }));
 	}
 
@@ -316,7 +303,7 @@ export class ExtHostNotebookKernels implements ExtHostNotebookKernelsShape {
 		if (this._activeExecutions.has(cellObj.uri)) {
 			throw new Error(`duplicate execution for ${cellObj.uri}`);
 		}
-		const execution = new NotebookCellExecutionTask(cellObj.notebook, cellObj, this._mainContext.getProxy(MainContext.MainThreadNotebookDocuments));
+		const execution = new NotebookCellExecutionTask(cellObj.notebook, cellObj, this._proxy);
 		this._activeExecutions.set(cellObj.uri, execution);
 		const listener = execution.onDidChangeState(() => {
 			if (execution.state === NotebookCellExecutionTaskState.Resolved) {
@@ -345,14 +332,14 @@ class NotebookCellExecutionTask extends Disposable {
 
 	private readonly _tokenSource = this._register(new CancellationTokenSource());
 
-	private readonly _collector: TimeoutBasedCollector<IImmediateCellEditOperation>;
+	private readonly _collector: TimeoutBasedCollector<CellExecuteEditDto>;
 
 	private _executionOrder: number | undefined;
 
 	constructor(
 		private readonly _document: ExtHostNotebookDocument,
 		private readonly _cell: ExtHostCell,
-		private readonly _proxy: MainThreadNotebookDocumentsShape
+		private readonly _proxy: MainThreadNotebookKernelsShape
 	) {
 		super();
 
@@ -369,12 +356,12 @@ class NotebookCellExecutionTask extends Disposable {
 		this._tokenSource.cancel();
 	}
 
-	private async applyEditSoon(edit: IImmediateCellEditOperation): Promise<void> {
+	private async applyEditSoon(edit: CellExecuteEditDto): Promise<void> {
 		await this._collector.addItem(edit);
 	}
 
-	private async applyEdits(edits: IImmediateCellEditOperation[]): Promise<void> {
-		return this._proxy.$applyEdits(this._document.uri, edits, false);
+	private async applyEdits(edits: CellExecuteEditDto[]): Promise<void> {
+		return this._proxy.$applyExecutionEdits(this._document.uri, edits);
 	}
 
 	private verifyStateForOutput() {
@@ -388,16 +375,16 @@ class NotebookCellExecutionTask extends Disposable {
 	}
 
 	private mixinMetadata(mixinMetadata: NullablePartialNotebookCellInternalMetadata) {
-		const edit: IImmediateCellEditOperation = { editType: CellEditType.PartialInternalMetadata, handle: this._cell.handle, internalMetadata: mixinMetadata };
-		this.applyEdits([edit]);
+		this.applyEdits([{
+			editType: CellEditType.PartialInternalMetadata,
+			handle: this._cell.handle,
+			internalMetadata: mixinMetadata
+		}]);
 	}
 
-	private cellIndexToHandle(cellOrCellIndex: vscode.NotebookCell | number | undefined): number {
+	private cellIndexToHandle(cellOrCellIndex: vscode.NotebookCell | undefined): number {
 		let cell: ExtHostCell | undefined = this._cell;
-		if (typeof cellOrCellIndex === 'number') {
-			// todo@jrieken remove support for number shortly
-			cell = this._document.getCellFromIndex(cellOrCellIndex);
-		} else if (cellOrCellIndex) {
+		if (cellOrCellIndex) {
 			cell = this._document.getCellFromApiCell(cellOrCellIndex);
 		}
 		if (!cell) {
@@ -406,7 +393,7 @@ class NotebookCellExecutionTask extends Disposable {
 		return cell.handle;
 	}
 
-	private validateAndConvertOutputs(items: vscode.NotebookCellOutput[]): IOutputDto[] {
+	private validateAndConvertOutputs(items: vscode.NotebookCellOutput[]): NotebookOutputDto[] {
 		return items.map(output => {
 			const newOutput = NotebookCellOutput.ensureUniqueMimeTypes(output.items, true);
 			if (newOutput === output.items) {
@@ -420,18 +407,15 @@ class NotebookCellExecutionTask extends Disposable {
 		});
 	}
 
-	private async updateOutputs(outputs: vscode.NotebookCellOutput | vscode.NotebookCellOutput[], cell: vscode.NotebookCell | number | undefined, append: boolean): Promise<void> {
+	private async updateOutputs(outputs: vscode.NotebookCellOutput | vscode.NotebookCellOutput[], cell: vscode.NotebookCell | undefined, append: boolean): Promise<void> {
 		const handle = this.cellIndexToHandle(cell);
 		const outputDtos = this.validateAndConvertOutputs(asArray(outputs));
 		return this.applyEditSoon({ editType: CellEditType.Output, handle, append, outputs: outputDtos });
 	}
 
-	private async updateOutputItems(items: vscode.NotebookCellOutputItem | vscode.NotebookCellOutputItem[], outputOrOutputId: vscode.NotebookCellOutput | string, append: boolean): Promise<void> {
-		if (NotebookCellOutput.isNotebookCellOutput(outputOrOutputId)) {
-			outputOrOutputId = outputOrOutputId.id;
-		}
+	private async updateOutputItems(items: vscode.NotebookCellOutputItem | vscode.NotebookCellOutputItem[], output: vscode.NotebookCellOutput, append: boolean): Promise<void> {
 		items = NotebookCellOutput.ensureUniqueMimeTypes(asArray(items), true);
-		return this.applyEditSoon({ editType: CellEditType.OutputItems, items: items.map(extHostTypeConverters.NotebookCellOutputItem.from), outputId: outputOrOutputId, append });
+		return this.applyEditSoon({ editType: CellEditType.OutputItems, items: items.map(extHostTypeConverters.NotebookCellOutputItem.from), outputId: output.id, append });
 	}
 
 	asApiObject(): vscode.NotebookCellExecution {
@@ -447,7 +431,7 @@ class NotebookCellExecutionTask extends Disposable {
 				});
 			},
 
-			start(context?: vscode.NotebookCellExecuteStartContext): void {
+			start(startTime?: number): void {
 				if (that._state === NotebookCellExecutionTaskState.Resolved || that._state === NotebookCellExecutionTaskState.Started) {
 					throw new Error('Cannot call start again');
 				}
@@ -457,11 +441,11 @@ class NotebookCellExecutionTask extends Disposable {
 
 				that.mixinMetadata({
 					runState: NotebookCellExecutionState.Executing,
-					runStartTime: context?.startTime ?? null
+					runStartTime: startTime ?? null
 				});
 			},
 
-			end(result?: vscode.NotebookCellExecuteEndContext): void {
+			end(success: boolean | undefined, endTime?: number): void {
 				if (that._state === NotebookCellExecutionTaskState.Resolved) {
 					throw new Error('Cannot call resolve twice');
 				}
@@ -471,34 +455,34 @@ class NotebookCellExecutionTask extends Disposable {
 
 				that.mixinMetadata({
 					runState: null,
-					lastRunSuccess: result?.success ?? null,
-					runEndTime: result?.endTime ?? null,
+					lastRunSuccess: success ?? null,
+					runEndTime: endTime ?? null,
 				});
 			},
 
-			clearOutput(cell?: vscode.NotebookCell | number): Thenable<void> {
+			clearOutput(cell?: vscode.NotebookCell): Thenable<void> {
 				that.verifyStateForOutput();
 				return that.updateOutputs([], cell, false);
 			},
 
-			async appendOutput(outputs: vscode.NotebookCellOutput | vscode.NotebookCellOutput[], cell?: vscode.NotebookCell | number): Promise<void> {
+			appendOutput(outputs: vscode.NotebookCellOutput | vscode.NotebookCellOutput[], cell?: vscode.NotebookCell): Promise<void> {
 				that.verifyStateForOutput();
 				return that.updateOutputs(outputs, cell, true);
 			},
 
-			async replaceOutput(outputs: vscode.NotebookCellOutput | vscode.NotebookCellOutput[], cell?: vscode.NotebookCell | number): Promise<void> {
+			replaceOutput(outputs: vscode.NotebookCellOutput | vscode.NotebookCellOutput[], cell?: vscode.NotebookCell): Promise<void> {
 				that.verifyStateForOutput();
 				return that.updateOutputs(outputs, cell, false);
 			},
 
-			async appendOutputItems(items: vscode.NotebookCellOutputItem | vscode.NotebookCellOutputItem[], output: vscode.NotebookCellOutput | string): Promise<void> {
+			appendOutputItems(items: vscode.NotebookCellOutputItem | vscode.NotebookCellOutputItem[], output: vscode.NotebookCellOutput): Promise<void> {
 				that.verifyStateForOutput();
-				that.updateOutputItems(items, output, true);
+				return that.updateOutputItems(items, output, true);
 			},
 
-			async replaceOutputItems(items: vscode.NotebookCellOutputItem | vscode.NotebookCellOutputItem[], output: vscode.NotebookCellOutput | string): Promise<void> {
+			replaceOutputItems(items: vscode.NotebookCellOutputItem | vscode.NotebookCellOutputItem[], output: vscode.NotebookCellOutput): Promise<void> {
 				that.verifyStateForOutput();
-				that.updateOutputItems(items, output, false);
+				return that.updateOutputItems(items, output, false);
 			}
 		};
 		return Object.freeze(result);

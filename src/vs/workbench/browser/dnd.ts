@@ -13,7 +13,7 @@ import { FileAccess, Schemas } from 'vs/base/common/network';
 import { IBaseTextResourceEditorInput } from 'vs/platform/editor/common/editor';
 import { DataTransfers, IDragAndDropData } from 'vs/base/browser/dnd';
 import { DragMouseEvent } from 'vs/base/browser/mouseEvent';
-import { MIME_BINARY } from 'vs/base/common/mime';
+import { Mimes } from 'vs/base/common/mime';
 import { isWindows } from 'vs/base/common/platform';
 import { ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
 import { isCodeEditor } from 'vs/editor/browser/editorBrowser';
@@ -75,7 +75,11 @@ export function extractEditorsDropData(e: DragEvent, externalOnly?: boolean): Ar
 					const rawResourcesData = e.dataTransfer.getData(DataTransfers.RESOURCES);
 					if (rawResourcesData) {
 						const resourcesRaw: string[] = JSON.parse(rawResourcesData);
-						editors.push(...resourcesRaw.map(resourceRaw => ({ resource: URI.parse(resourceRaw) })));
+						for (const resourceRaw of resourcesRaw) {
+							if (resourceRaw.indexOf(':') > 0) { // mitigate https://github.com/microsoft/vscode/issues/124946
+								editors.push({ resource: URI.parse(resourceRaw) });
+							}
+						}
 					}
 				} catch (error) {
 					// Invalid transfer
@@ -109,8 +113,20 @@ export function extractEditorsDropData(e: DragEvent, externalOnly?: boolean): Ar
 				// Invalid transfer
 			}
 		}
-	}
 
+		// Check for terminals transfer
+		const terminals = e.dataTransfer.getData(DataTransfers.TERMINALS);
+		if (terminals) {
+			try {
+				const terminalEditors: string[] = JSON.parse(terminals);
+				for (const terminalEditor of terminalEditors) {
+					editors.push({ resource: URI.parse(terminalEditor), isExternal: true });
+				}
+			} catch (error) {
+				// Invalid transfer
+			}
+		}
+	}
 	return editors;
 }
 
@@ -169,12 +185,13 @@ export class ResourcesDropHandler {
 		const targetGroup = resolveTargetGroup();
 		await this.editorService.openEditors(editors.map(editor => ({
 			...editor,
+			resource: editor.resource,
 			options: {
 				...editor.options,
 				pinned: true,
 				index: targetIndex
 			}
-		})), targetGroup);
+		})), targetGroup, { validateTrust: true });
 
 		// Finish with provided function
 		afterDrop(targetGroup);
@@ -247,7 +264,7 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 
 	// Extract resources from URIs or Editors that
 	// can be handled by the file service
-	const fileSystemResources = coalesce(resourcesOrEditors.map(resourceOrEditor => {
+	const resources = coalesce(resourcesOrEditors.map(resourceOrEditor => {
 		if (URI.isUri(resourceOrEditor)) {
 			return { resource: resourceOrEditor };
 		}
@@ -261,7 +278,8 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 		}
 
 		return resourceOrEditor;
-	})).filter(({ resource }) => fileService.canHandleResource(resource));
+	}));
+	const fileSystemResources = resources.filter(({ resource }) => fileService.canHandleResource(resource));
 
 	// Text: allows to paste into text-capable areas
 	const lineDelimiter = isWindows ? '\r\n' : '\n';
@@ -273,13 +291,19 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 		// TODO@sandbox this will no longer work when `vscode-file`
 		// is enabled because we block loading resources that are not
 		// inside installation dir
-		event.dataTransfer.setData(DataTransfers.DOWNLOAD_URL, [MIME_BINARY, basename(firstFile.resource), FileAccess.asBrowserUri(firstFile.resource).toString()].join(':'));
+		event.dataTransfer.setData(DataTransfers.DOWNLOAD_URL, [Mimes.binary, basename(firstFile.resource), FileAccess.asBrowserUri(firstFile.resource).toString()].join(':'));
 	}
 
 	// Resource URLs: allows to drop multiple file resources to a target in VS Code
 	const files = fileSystemResources.filter(({ isDirectory }) => !isDirectory);
 	if (files.length) {
 		event.dataTransfer.setData(DataTransfers.RESOURCES, JSON.stringify(files.map(({ resource }) => resource.toString())));
+	}
+
+	// Terminal URI
+	const terminalResources = resources.filter(({ resource }) => resource.scheme === Schemas.vscodeTerminal);
+	if (terminalResources.length) {
+		event.dataTransfer.setData(DataTransfers.TERMINALS, JSON.stringify(terminalResources.map(({ resource }) => resource.toString())));
 	}
 
 	// Editors: enables cross window DND of editors
@@ -291,7 +315,7 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 		// Extract resource editor from provided object or URI
 		let editor: IDraggedResourceEditorInput | undefined = undefined;
 		if (isEditorIdentifier(resourceOrEditor)) {
-			editor = resourceOrEditor.editor.asResourceEditorInput(resourceOrEditor.groupId);
+			editor = resourceOrEditor.editor.toUntyped({ preserveViewState: resourceOrEditor.groupId });
 		} else if (URI.isUri(resourceOrEditor)) {
 			editor = { resource: resourceOrEditor };
 		} else if (!resourceOrEditor.isDirectory) {
@@ -305,7 +329,7 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 		// Fill in some properties if they are not there already by accessing
 		// some well known things from the text file universe.
 		// This is not ideal for custom editors, but those have a chance to
-		// provide everything from the `asResourceEditorInput` method.
+		// provide everything from the `toUntyped` method.
 		{
 			const resource = editor.resource;
 			if (resource) {

@@ -6,7 +6,7 @@
 import { LocalProcessExtensionHost } from 'vs/workbench/services/extensions/electron-browser/localProcessExtensionHost';
 import { CachedExtensionScanner } from 'vs/workbench/services/extensions/electron-browser/cachedExtensionScanner';
 import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
-import { AbstractExtensionService, ExtensionRunningLocation, ExtensionRunningLocationClassifier, ExtensionRunningPreference, parseScannedExtension } from 'vs/workbench/services/extensions/common/abstractExtensionService';
+import { AbstractExtensionService, ExtensionRunningLocation, ExtensionRunningLocationClassifier, ExtensionRunningPreference } from 'vs/workbench/services/extensions/common/abstractExtensionService';
 import * as nls from 'vs/nls';
 import { runWhenIdle } from 'vs/base/common/async';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
@@ -27,7 +27,6 @@ import { ExtensionIdentifier, IExtension, ExtensionType, IExtensionDescription, 
 import { IFileService } from 'vs/platform/files/common/files';
 import { PersistentConnectionEventType } from 'vs/platform/remote/common/remoteAgentConnection';
 import { IProductService } from 'vs/platform/product/common/productService';
-import { Logger } from 'vs/workbench/services/extensions/common/extensionPoints';
 import { flatten } from 'vs/base/common/arrays';
 import { INativeHostService } from 'vs/platform/native/electron-sandbox/native';
 import { IRemoteExplorerService } from 'vs/workbench/services/remote/common/remoteExplorerService';
@@ -65,7 +64,7 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		@IRemoteAgentService private readonly _remoteAgentService: IRemoteAgentService,
 		@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,
 		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
-		@IWebExtensionsScannerService private readonly _webExtensionsScannerService: IWebExtensionsScannerService,
+		@IWebExtensionsScannerService webExtensionsScannerService: IWebExtensionsScannerService,
 		@INativeHostService private readonly _nativeHostService: INativeHostService,
 		@IHostService private readonly _hostService: IHostService,
 		@IRemoteExplorerService private readonly _remoteExplorerService: IRemoteExplorerService,
@@ -89,7 +88,8 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 			extensionManagementService,
 			contextService,
 			configurationService,
-			extensionManifestPropertiesService
+			extensionManifestPropertiesService,
+			webExtensionsScannerService
 		);
 
 		this._enableLocalWebWorker = this._isLocalWebWorkerEnabled();
@@ -111,7 +111,7 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 	}
 
 	private _isLocalWebWorkerEnabled() {
-		if (this._configurationService.getValue<boolean>(webWorkerExtHostConfig)) {
+		if (this._configurationService.getValue(webWorkerExtHostConfig)) {
 			return true;
 		}
 		if (this._environmentService.isExtensionDevelopment && this._environmentService.extensionDevelopmentKind?.some(k => k === 'web')) {
@@ -131,7 +131,7 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 	private async _scanAllLocalExtensions(): Promise<IExtensionDescription[]> {
 		return flatten(await Promise.all([
 			this._extensionScanner.scannedExtensions,
-			this._webExtensionsScannerService.scanAndTranslateExtensions().then(extensions => extensions.map(parseScannedExtension))
+			this._scanWebExtensions(),
 		]));
 	}
 
@@ -307,16 +307,6 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 
 	// --- impl
 
-	private createLogger(): Logger {
-		return new Logger((severity, source, message) => {
-			if (this._isDev && source) {
-				this._logOrShowMessage(severity, `[${source}]: ${message}`);
-			} else {
-				this._logOrShowMessage(severity, message);
-			}
-		});
-	}
-
 	private async _resolveAuthorityAgain(): Promise<void> {
 		const remoteAuthority = this._environmentService.remoteAuthority;
 		if (!remoteAuthority) {
@@ -353,9 +343,10 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 				return localProcessExtensionHost.getCanonicalURI(remoteAuthority, uri);
 			});
 
-			// Now that the canonical URI provider has been registered, we
-			// need to wait for the trust state to be initialized
-			await this._workspaceTrustManagementService.workspaceTrustInitialized;
+			// Now that the canonical URI provider has been registered, we need to wait for the trust state to be
+			// calculated. The trust state will be used while resolving the authority, however the resolver can
+			// override the trust state through the resolver result.
+			await this._workspaceTrustManagementService.workspaceResolved;
 			let resolverResult: ResolverResult;
 
 			try {
@@ -396,7 +387,6 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 				this._remoteAgentService.getEnvironment(),
 				this._remoteAgentService.scanExtensions()
 			]);
-			remoteExtensions = this._checkEnabledAndProposedAPI(remoteExtensions, false);
 
 			if (!remoteEnv) {
 				this._notificationService.notify({ severity: Severity.Error, message: nls.localize('getEnvironmentFailure', "Could not fetch remote environment") });
@@ -416,6 +406,11 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 	}
 
 	private async _startLocalExtensionHost(remoteAuthority: string | undefined = undefined, remoteEnv: IRemoteAgentEnvironment | null = null, remoteExtensions: IExtensionDescription[] = []): Promise<void> {
+		// Ensure that the workspace trust state has been fully initialized so
+		// that the extension host can start with the correct set of extensions.
+		await this._workspaceTrustManagementService.workspaceTrustInitialized;
+
+		remoteExtensions = this._checkEnabledAndProposedAPI(remoteExtensions, false);
 		const localExtensions = this._checkEnabledAndProposedAPI(await this._scanAllLocalExtensions(), false);
 		this._runningLocation = this._runningLocationClassifier.determineRunningLocation(localExtensions, remoteExtensions);
 

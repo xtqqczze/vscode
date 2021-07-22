@@ -1443,6 +1443,32 @@ declare namespace monaco.editor {
 		 * If set, the decoration will be rendered after the text with this CSS class name.
 		 */
 		afterContentClassName?: string | null;
+		/**
+		 * If set, text will be injected in the view after the range.
+		 */
+		after?: InjectedTextOptions | null;
+		/**
+		 * If set, text will be injected in the view before the range.
+		 */
+		before?: InjectedTextOptions | null;
+	}
+
+	/**
+	 * Configures text that is injected into the view without changing the underlying document.
+	*/
+	export interface InjectedTextOptions {
+		/**
+		 * Sets the text to inject. Must be a single line.
+		 */
+		readonly content: string;
+		/**
+		 * If set, the decoration will be rendered inline with the text with this CSS class name.
+		 */
+		readonly inlineClassName?: string | null;
+		/**
+		 * If there is an `inlineClassName` which affects letter spacing.
+		 */
+		readonly inlineClassNameAffectsLetterSpacing?: boolean;
 	}
 
 	/**
@@ -1908,6 +1934,11 @@ declare namespace monaco.editor {
 		 * @param filterOutValidation If set, it will ignore decorations specific to validation (i.e. warnings, errors).
 		 */
 		getOverviewRulerDecorations(ownerId?: number, filterOutValidation?: boolean): IModelDecoration[];
+		/**
+		 * Gets all the decorations that contain injected text.
+		 * @param ownerId If set, it will ignore decorations belonging to other owners.
+		 */
+		getInjectedTextDecorations(ownerId?: number): IModelDecoration[];
 		/**
 		 * Normalize a string containing whitespace according to indentation rules (converts to spaces or to tabs).
 		 */
@@ -2973,6 +3004,7 @@ declare namespace monaco.editor {
 		 * Suggest options.
 		 */
 		suggest?: ISuggestOptions;
+		inlineSuggest?: IInlineSuggestOptions;
 		/**
 		 * Smart select options.
 		 */
@@ -3139,6 +3171,11 @@ declare namespace monaco.editor {
 		 */
 		foldingHighlight?: boolean;
 		/**
+		 * Auto fold imports folding regions.
+		 * Defaults to true.
+		 */
+		foldingImportsByDefault?: boolean;
+		/**
 		 * Controls whether the fold actions in the gutter stay always visible or hide unless the mouse is over the gutter.
 		 * Defaults to 'mouseover'.
 		 */
@@ -3155,7 +3192,7 @@ declare namespace monaco.editor {
 		matchBrackets?: 'never' | 'near' | 'always';
 		/**
 		 * Enable rendering of whitespace.
-		 * Defaults to none.
+		 * Defaults to 'selection'.
 		 */
 		renderWhitespace?: 'none' | 'boundary' | 'selection' | 'trailing' | 'all';
 		/**
@@ -3732,6 +3769,7 @@ declare namespace monaco.editor {
 		/**
 		 * The size of arrows (if displayed).
 		 * Defaults to 11.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		arrowSize?: number;
 		/**
@@ -3747,16 +3785,19 @@ declare namespace monaco.editor {
 		/**
 		 * Cast horizontal and vertical shadows when the content is scrolled.
 		 * Defaults to true.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		useShadows?: boolean;
 		/**
 		 * Render arrows at the top and bottom of the vertical scrollbar.
 		 * Defaults to false.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		verticalHasArrows?: boolean;
 		/**
 		 * Render arrows at the left and right of the horizontal scrollbar.
 		 * Defaults to false.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		horizontalHasArrows?: boolean;
 		/**
@@ -3767,6 +3808,7 @@ declare namespace monaco.editor {
 		/**
 		 * Always consume mouse wheel events (always call preventDefault() and stopPropagation() on the browser events).
 		 * Defaults to true.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		alwaysConsumeMouseWheel?: boolean;
 		/**
@@ -3782,11 +3824,13 @@ declare namespace monaco.editor {
 		/**
 		 * Width in pixels for the vertical slider.
 		 * Defaults to `verticalScrollbarSize`.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		verticalSliderSize?: number;
 		/**
 		 * Height in pixels for the horizontal slider.
 		 * Defaults to `horizontalScrollbarSize`.
+		 * **NOTE**: This option cannot be updated using `updateOptions()`
 		 */
 		horizontalSliderSize?: number;
 		/**
@@ -3811,6 +3855,23 @@ declare namespace monaco.editor {
 		readonly verticalSliderSize: number;
 		readonly scrollByPage: boolean;
 	}
+
+	export interface IInlineSuggestOptions {
+		/**
+		 * Enable or disable the rendering of automatic inline completions.
+		*/
+		enabled?: boolean;
+		/**
+		 * Configures the mode.
+		 * Use `prefix` to only show ghost text if the text to replace is a prefix of the suggestion text.
+		 * Use `subword` to only show ghost text if the replace text is a subword of the suggestion text.
+		 * Use `subwordSmart` to only show ghost text if the replace text is a subword of the suggestion text, but the subword must start after the cursor position.
+		 * Defaults to `prefix`.
+		*/
+		mode?: 'prefix' | 'subword' | 'subwordSmart';
+	}
+
+	export type InternalInlineSuggestOptions = Readonly<Required<IInlineSuggestOptions>>;
 
 	/**
 	 * Configuration options for editor suggest widget
@@ -3847,16 +3908,11 @@ declare namespace monaco.editor {
 		/**
 		 * Enable or disable the rendering of the suggestion preview.
 		 */
-		showSuggestionPreview?: boolean;
+		preview?: boolean;
 		/**
-		 * Enable or disable the rendering of automatic inline completions.
+		 * Configures the mode of the preview.
 		*/
-		showInlineCompletions?: boolean;
-		/**
-		 * Enable or disable the default expansion of the ghost text as used
-		 * by the suggestion preview or the inline completions.
-		 */
-		ghostTextExpanded?: boolean;
+		previewMode?: 'prefix' | 'subword' | 'subwordSmart';
 		/**
 		 * Show details inline with the label. Defaults to true.
 		 */
@@ -4051,97 +4107,99 @@ declare namespace monaco.editor {
 		folding = 35,
 		foldingStrategy = 36,
 		foldingHighlight = 37,
-		unfoldOnClickAfterEndOfLine = 38,
-		fontFamily = 39,
-		fontInfo = 40,
-		fontLigatures = 41,
-		fontSize = 42,
-		fontWeight = 43,
-		formatOnPaste = 44,
-		formatOnType = 45,
-		glyphMargin = 46,
-		gotoLocation = 47,
-		hideCursorInOverviewRuler = 48,
-		highlightActiveIndentGuide = 49,
-		hover = 50,
-		inDiffEditor = 51,
-		letterSpacing = 52,
-		lightbulb = 53,
-		lineDecorationsWidth = 54,
-		lineHeight = 55,
-		lineNumbers = 56,
-		lineNumbersMinChars = 57,
-		linkedEditing = 58,
-		links = 59,
-		matchBrackets = 60,
-		minimap = 61,
-		mouseStyle = 62,
-		mouseWheelScrollSensitivity = 63,
-		mouseWheelZoom = 64,
-		multiCursorMergeOverlapping = 65,
-		multiCursorModifier = 66,
-		multiCursorPaste = 67,
-		occurrencesHighlight = 68,
-		overviewRulerBorder = 69,
-		overviewRulerLanes = 70,
-		padding = 71,
-		parameterHints = 72,
-		peekWidgetDefaultFocus = 73,
-		definitionLinkOpensInPeek = 74,
-		quickSuggestions = 75,
-		quickSuggestionsDelay = 76,
-		readOnly = 77,
-		renameOnType = 78,
-		renderControlCharacters = 79,
-		renderIndentGuides = 80,
-		renderFinalNewline = 81,
-		renderLineHighlight = 82,
-		renderLineHighlightOnlyWhenFocus = 83,
-		renderValidationDecorations = 84,
-		renderWhitespace = 85,
-		revealHorizontalRightPadding = 86,
-		roundedSelection = 87,
-		rulers = 88,
-		scrollbar = 89,
-		scrollBeyondLastColumn = 90,
-		scrollBeyondLastLine = 91,
-		scrollPredominantAxis = 92,
-		selectionClipboard = 93,
-		selectionHighlight = 94,
-		selectOnLineNumbers = 95,
-		showFoldingControls = 96,
-		showUnused = 97,
-		snippetSuggestions = 98,
-		smartSelect = 99,
-		smoothScrolling = 100,
-		stickyTabStops = 101,
-		stopRenderingLineAfter = 102,
-		suggest = 103,
-		suggestFontSize = 104,
-		suggestLineHeight = 105,
-		suggestOnTriggerCharacters = 106,
-		suggestSelection = 107,
-		tabCompletion = 108,
-		tabIndex = 109,
-		unusualLineTerminators = 110,
-		useShadowDOM = 111,
-		useTabStops = 112,
-		wordSeparators = 113,
-		wordWrap = 114,
-		wordWrapBreakAfterCharacters = 115,
-		wordWrapBreakBeforeCharacters = 116,
-		wordWrapColumn = 117,
-		wordWrapOverride1 = 118,
-		wordWrapOverride2 = 119,
-		wrappingIndent = 120,
-		wrappingStrategy = 121,
-		showDeprecated = 122,
-		inlayHints = 123,
-		editorClassName = 124,
-		pixelRatio = 125,
-		tabFocusMode = 126,
-		layoutInfo = 127,
-		wrappingInfo = 128
+		foldingImportsByDefault = 38,
+		unfoldOnClickAfterEndOfLine = 39,
+		fontFamily = 40,
+		fontInfo = 41,
+		fontLigatures = 42,
+		fontSize = 43,
+		fontWeight = 44,
+		formatOnPaste = 45,
+		formatOnType = 46,
+		glyphMargin = 47,
+		gotoLocation = 48,
+		hideCursorInOverviewRuler = 49,
+		highlightActiveIndentGuide = 50,
+		hover = 51,
+		inDiffEditor = 52,
+		inlineSuggest = 53,
+		letterSpacing = 54,
+		lightbulb = 55,
+		lineDecorationsWidth = 56,
+		lineHeight = 57,
+		lineNumbers = 58,
+		lineNumbersMinChars = 59,
+		linkedEditing = 60,
+		links = 61,
+		matchBrackets = 62,
+		minimap = 63,
+		mouseStyle = 64,
+		mouseWheelScrollSensitivity = 65,
+		mouseWheelZoom = 66,
+		multiCursorMergeOverlapping = 67,
+		multiCursorModifier = 68,
+		multiCursorPaste = 69,
+		occurrencesHighlight = 70,
+		overviewRulerBorder = 71,
+		overviewRulerLanes = 72,
+		padding = 73,
+		parameterHints = 74,
+		peekWidgetDefaultFocus = 75,
+		definitionLinkOpensInPeek = 76,
+		quickSuggestions = 77,
+		quickSuggestionsDelay = 78,
+		readOnly = 79,
+		renameOnType = 80,
+		renderControlCharacters = 81,
+		renderIndentGuides = 82,
+		renderFinalNewline = 83,
+		renderLineHighlight = 84,
+		renderLineHighlightOnlyWhenFocus = 85,
+		renderValidationDecorations = 86,
+		renderWhitespace = 87,
+		revealHorizontalRightPadding = 88,
+		roundedSelection = 89,
+		rulers = 90,
+		scrollbar = 91,
+		scrollBeyondLastColumn = 92,
+		scrollBeyondLastLine = 93,
+		scrollPredominantAxis = 94,
+		selectionClipboard = 95,
+		selectionHighlight = 96,
+		selectOnLineNumbers = 97,
+		showFoldingControls = 98,
+		showUnused = 99,
+		snippetSuggestions = 100,
+		smartSelect = 101,
+		smoothScrolling = 102,
+		stickyTabStops = 103,
+		stopRenderingLineAfter = 104,
+		suggest = 105,
+		suggestFontSize = 106,
+		suggestLineHeight = 107,
+		suggestOnTriggerCharacters = 108,
+		suggestSelection = 109,
+		tabCompletion = 110,
+		tabIndex = 111,
+		unusualLineTerminators = 112,
+		useShadowDOM = 113,
+		useTabStops = 114,
+		wordSeparators = 115,
+		wordWrap = 116,
+		wordWrapBreakAfterCharacters = 117,
+		wordWrapBreakBeforeCharacters = 118,
+		wordWrapColumn = 119,
+		wordWrapOverride1 = 120,
+		wordWrapOverride2 = 121,
+		wrappingIndent = 122,
+		wrappingStrategy = 123,
+		showDeprecated = 124,
+		inlayHints = 125,
+		editorClassName = 126,
+		pixelRatio = 127,
+		tabFocusMode = 128,
+		layoutInfo = 129,
+		wrappingInfo = 130
 	}
 	export const EditorOptions: {
 		acceptSuggestionOnCommitCharacter: IEditorOption<EditorOption.acceptSuggestionOnCommitCharacter, boolean>;
@@ -4183,6 +4241,7 @@ declare namespace monaco.editor {
 		folding: IEditorOption<EditorOption.folding, boolean>;
 		foldingStrategy: IEditorOption<EditorOption.foldingStrategy, 'auto' | 'indentation'>;
 		foldingHighlight: IEditorOption<EditorOption.foldingHighlight, boolean>;
+		foldingImportsByDefault: IEditorOption<EditorOption.foldingImportsByDefault, boolean>;
 		unfoldOnClickAfterEndOfLine: IEditorOption<EditorOption.unfoldOnClickAfterEndOfLine, boolean>;
 		fontFamily: IEditorOption<EditorOption.fontFamily, string>;
 		fontInfo: IEditorOption<EditorOption.fontInfo, FontInfo>;
@@ -4250,6 +4309,7 @@ declare namespace monaco.editor {
 		smoothScrolling: IEditorOption<EditorOption.smoothScrolling, boolean>;
 		stopRenderingLineAfter: IEditorOption<EditorOption.stopRenderingLineAfter, number>;
 		suggest: IEditorOption<EditorOption.suggest, InternalSuggestOptions>;
+		inlineSuggest: IEditorOption<EditorOption.inlineSuggest, any>;
 		suggestFontSize: IEditorOption<EditorOption.suggestFontSize, number>;
 		suggestLineHeight: IEditorOption<EditorOption.suggestLineHeight, number>;
 		suggestOnTriggerCharacters: IEditorOption<EditorOption.suggestOnTriggerCharacters, boolean>;
@@ -5336,6 +5396,11 @@ declare namespace monaco.languages {
 	export function registerInlineCompletionsProvider(languageId: string, provider: InlineCompletionsProvider): IDisposable;
 
 	/**
+	 * Register an inlay hints provider.
+	 */
+	export function registerInlayHintsProvider(languageId: string, provider: InlayHintsProvider): IDisposable;
+
+	/**
 	 * Contains additional diagnostic information about the context in which
 	 * a [code action](#CodeActionProvider.provideCodeActions) is run.
 	 */
@@ -5659,22 +5724,9 @@ declare namespace monaco.languages {
 	}
 
 	export interface CompletionItemLabel {
-		/**
-		 * The function or variable. Rendered leftmost.
-		 */
-		name: string;
-		/**
-		 * The parameters without the return type. Render after `name`.
-		 */
-		parameters?: string;
-		/**
-		 * The fully qualified name, like package name or file path. Rendered after `signature`.
-		 */
-		qualifier?: string;
-		/**
-		 * The return-type of a function or type of a property/variable. Rendered rightmost.
-		 */
-		type?: string;
+		label: string;
+		detail?: string;
+		description?: string;
 	}
 
 	export enum CompletionItemTag {

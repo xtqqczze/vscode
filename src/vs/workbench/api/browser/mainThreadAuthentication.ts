@@ -17,6 +17,12 @@ import { INotificationService } from 'vs/platform/notification/common/notificati
 import { fromNow } from 'vs/base/common/date';
 import { ActivationKind, IExtensionService } from 'vs/workbench/services/extensions/common/extensions';
 
+interface TrustedExtensionsQuickPickItem {
+	label: string;
+	description: string;
+	extension: AllowedExtension;
+}
+
 export class MainThreadAuthenticationProvider extends Disposable {
 	constructor(
 		private readonly _proxy: ExtHostAuthenticationShape,
@@ -34,11 +40,11 @@ export class MainThreadAuthenticationProvider extends Disposable {
 		const allowedExtensions = readAllowedExtensions(this.storageService, this.id, accountName);
 
 		if (!allowedExtensions.length) {
-			this.dialogService.show(Severity.Info, nls.localize('noTrustedExtensions', "This account has not been used by any extensions."), []);
+			this.dialogService.show(Severity.Info, nls.localize('noTrustedExtensions', "This account has not been used by any extensions."));
 			return;
 		}
 
-		const quickPick = this.quickInputService.createQuickPick<{ label: string, description: string, extension: AllowedExtension }>();
+		const quickPick = this.quickInputService.createQuickPick<TrustedExtensionsQuickPickItem>();
 		quickPick.canSelectMany = true;
 		quickPick.customButton = true;
 		quickPick.customLabel = nls.localize('manageTrustedExtensions.cancel', 'Cancel');
@@ -60,10 +66,21 @@ export class MainThreadAuthenticationProvider extends Disposable {
 		quickPick.placeholder = nls.localize('manageExensions', "Choose which extensions can access this account");
 
 		quickPick.onDidAccept(() => {
-			const updatedAllowedList = quickPick.selectedItems.map(item => item.extension);
+			const updatedAllowedList = quickPick.items
+				.map(i => (i as TrustedExtensionsQuickPickItem).extension);
 			this.storageService.store(`${this.id}-${accountName}`, JSON.stringify(updatedAllowedList), StorageScope.GLOBAL, StorageTarget.USER);
 
 			quickPick.dispose();
+		});
+
+		quickPick.onDidChangeSelection((changed) => {
+			quickPick.items.forEach(item => {
+				if ((item as TrustedExtensionsQuickPickItem).extension) {
+					(item as TrustedExtensionsQuickPickItem).extension.allowed = false;
+				}
+			});
+
+			changed.forEach((item) => item.extension.allowed = true);
 		});
 
 		quickPick.onDidHide(() => {
@@ -135,14 +152,6 @@ export class MainThreadAuthentication extends Disposable implements MainThreadAu
 			this._proxy.$onDidChangeAuthenticationSessions(e.providerId, e.label);
 		}));
 
-		this._register(this.authenticationService.onDidRegisterAuthenticationProvider(info => {
-			this._proxy.$onDidChangeAuthenticationProviders([info], []);
-		}));
-
-		this._register(this.authenticationService.onDidUnregisterAuthenticationProvider(info => {
-			this._proxy.$onDidChangeAuthenticationProviders([], [info]);
-		}));
-
 		this._proxy.$setProviders(this.authenticationService.declaredProviders);
 
 		this._register(this.authenticationService.onDidChangeDeclaredProviders(e => {
@@ -170,10 +179,13 @@ export class MainThreadAuthentication extends Disposable implements MainThreadAu
 	$removeSession(providerId: string, sessionId: string): Promise<void> {
 		return this.authenticationService.removeSession(providerId, sessionId);
 	}
-	private async loginPrompt(providerName: string, extensionName: string): Promise<boolean> {
+	private async loginPrompt(providerName: string, extensionName: string, recreatingSession: boolean): Promise<boolean> {
+		const message = recreatingSession
+			? nls.localize('confirmRelogin', "The extension '{0}' wants you to sign in again using {1}.", extensionName, providerName)
+			: nls.localize('confirmLogin', "The extension '{0}' wants to sign in using {1}.", extensionName, providerName);
 		const { choice } = await this.dialogService.show(
 			Severity.Info,
-			nls.localize('confirmLogin', "The extension '{0}' wants to sign in using {1}.", extensionName, providerName),
+			message,
 			[nls.localize('allow', "Allow"), nls.localize('cancel', "Cancel")],
 			{
 				cancelId: 1
@@ -227,12 +239,17 @@ export class MainThreadAuthentication extends Disposable implements MainThreadAu
 		return this.authenticationService.selectSession(providerId, extensionId, extensionName, scopes, potentialSessions);
 	}
 
-	async $getSession(providerId: string, scopes: string[], extensionId: string, extensionName: string, options: { createIfNone: boolean, clearSessionPreference: boolean }): Promise<modes.AuthenticationSession | undefined> {
+	async $getSession(providerId: string, scopes: string[], extensionId: string, extensionName: string, options: { createIfNone: boolean, forceRecreate: boolean, clearSessionPreference: boolean }): Promise<modes.AuthenticationSession | undefined> {
 		const sessions = await this.authenticationService.getSessions(providerId, scopes, true);
+		let silent = !options.createIfNone;
 
-		const silent = !options.createIfNone;
+		if (options.forceRecreate && !sessions.length) {
+			throw new Error('No existing sessions found.');
+		}
+
 		let session: modes.AuthenticationSession | undefined;
-		if (sessions.length) {
+		// Ignore existing sessions if we are forceRecreating
+		if (!options.forceRecreate && sessions.length) {
 			if (!this.authenticationService.supportsMultipleAccounts(providerId)) {
 				session = sessions[0];
 				const allowed = this.authenticationService.isAccessAllowed(providerId, session.account.label, extensionId);
@@ -253,9 +270,10 @@ export class MainThreadAuthentication extends Disposable implements MainThreadAu
 				return this.selectSession(providerId, extensionId, extensionName, scopes, sessions, !!options.clearSessionPreference, silent);
 			}
 		} else {
-			if (!silent) {
-				const providerName = await this.authenticationService.getLabel(providerId);
-				const isAllowed = await this.loginPrompt(providerName, extensionName);
+			// If we are forceRecreating, we need to show the prompt.
+			if (options.forceRecreate || !silent) {
+				const providerName = this.authenticationService.getLabel(providerId);
+				const isAllowed = await this.loginPrompt(providerName, extensionName, options.forceRecreate);
 				if (!isAllowed) {
 					throw new Error('User did not consent to login.');
 				}
